@@ -1,7 +1,13 @@
 name: build_Qt6_msvc2022
 
-on: workflow_dispatch
-#on: [push, pull_request]
+# 关键：手动触发配置
+on:
+  workflow_dispatch:
+    inputs:
+      qt_version:
+        description: '指定 Qt 版本（留空则自动获取最新）'
+        required: false
+        default: ''
 
 env:
   FILE_NAME: static-Release_msvc2022_64
@@ -11,51 +17,58 @@ jobs:
     runs-on: windows-latest
 
     steps:
-    # 检出本仓库
+    # 1. 检出本仓库
     - name: Checkout repository
       uses: actions/checkout@v6
 
-    # 安装python
+    # 2. 安装 7-Zip（打包必须）
+    - name: Install 7-Zip
+      run: choco install 7zip -y
+
+    # 3. 安装 Python（你的脚本需要）
     - name: Setup Python
       uses: actions/setup-python@v6
       with:
         python-version: '3.13'
         architecture: 'x64'
 
-    # 安装msvc
+    # 4. 安装 MSVC 构建工具
     - name: Add MSBuild to PATH
       uses: microsoft/setup-msbuild@v3
       with:
         msbuild-architecture: x64
 
-    # 安装vsdevenv
+    # 5. 安装 vsdevenv
     - name: Setup vsdevenv
       uses: seanmiddleditch/gha-setup-vsdevenv@master
 
-    # 自动获取最新 Qt 版本号
-    - name: Get Latest Qt Version
+    # 6. 获取 Qt 版本（支持手动指定或自动获取最新）
+    - name: Get Qt Version
       run: |
-        # 1. 获取最新的次要版本目录（如 6.10）
-        $qtMinor = (curl -s https://download.qt.io/official_releases/qt/ | `
-          Select-String -Pattern '\d+\.\d+/' | `
-          ForEach-Object { [regex]::Match($_, '\d+\.\d+').Value } | `
-          Sort-Object { [version]$_ } -Descending | `
-          Select-Object -First 1)
-        echo "Latest minor version: $qtMinor"
+        if (-not [string]::IsNullOrEmpty('${{ github.event.inputs.qt_version }}')) {
+          # 如果手动指定了版本，直接使用
+          $qtFull = '${{ github.event.inputs.qt_version }}'
+          $qtMinor = $qtFull -replace '^(\d+\.\d+).*', '$1'
+        } else {
+          # 自动获取最新版本
+          $qtMinor = (curl -s https://download.qt.io/official_releases/qt/ | `
+            Select-String -Pattern '\d+\.\d+/' | `
+            ForEach-Object { [regex]::Match($_, '\d+\.\d+').Value } | `
+            Sort-Object { [version]$_ } -Descending | `
+            Select-Object -First 1)
+          
+          $qtFull = (curl -s "https://download.qt.io/official_releases/qt/$qtMinor/" | `
+            Select-String -Pattern '\d+\.\d+\.\d+/' | `
+            ForEach-Object { [regex]::Match($_, '\d+\.\d+\.\d+').Value } | `
+            Sort-Object { [version]$_ } -Descending | `
+            Select-Object -First 1)
+        }
 
-        # 2. 获取该目录下的最新补丁版本（如 6.10.3）
-        $qtFull = (curl -s "https://download.qt.io/official_releases/qt/$qtMinor/" | `
-          Select-String -Pattern '\d+\.\d+\.\d+/' | `
-          ForEach-Object { [regex]::Match($_, '\d+\.\d+\.\d+').Value } | `
-          Sort-Object { [version]$_ } -Descending | `
-          Select-Object -First 1)
-        echo "Latest full version: $qtFull"
-
-        # 3. 设置为环境变量（给后续 step 使用）
         echo "QT_VERSION=$qtFull" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
         echo "QT_VERSION2=$qtMinor" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+        echo "QT_ROOT=../Qt/$qtFull-static" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
-    # 构建Qt
+    # 7. 构建 Qt（修复了解压和路径问题）
     - name: Build Qt
       run: |
         $repoRoot = $env:GITHUB_WORKSPACE
@@ -63,37 +76,52 @@ jobs:
         $qtBase = Join-Path $parentDir "Qt"
 
         # 创建文件夹
-        if (-not (Test-Path $qtBase)) { New-Item -ItemType Directory -Path $qtBase | Out-Null }
+        New-Item -ItemType Directory -Path $qtBase -Force | Out-Null
         Set-Location $qtBase
 
         New-Item -ItemType Directory -Path "./${{env.QT_VERSION}}" -Force | Out-Null
         New-Item -ItemType Directory -Path "./${{env.QT_VERSION}}-static" -Force | Out-Null
 
-        # 下载源代码并解压
-        curl -L -o qt-everywhere-src.zip "https://download.qt.io/official_releases/qt/${{env.QT_VERSION2}}/${{env.QT_VERSION}}/single/qt-everywhere-src-${{env.QT_VERSION}}.zip"
-        unzip -q qt-everywhere-src.zip -d "./${{env.QT_VERSION}}"
+        # 下载源代码（使用 TLS 1.2 避免下载失败）
+        [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+        $url = "https://download.qt.io/official_releases/qt/${{env.QT_VERSION2}}/${{env.QT_VERSION}}/single/qt-everywhere-src-${{env.QT_VERSION}}.zip"
+        Write-Host "Downloading Qt from: $url"
+        Invoke-WebRequest -Uri $url -OutFile "qt-everywhere-src.zip" -UseBasicParsing
 
-        # 调用编译脚本（传入 QT_PATH 供脚本内部使用）
-        $qtPath = (Get-Location).Path
+        # 解压源代码（Windows 原生支持）
+        Expand-Archive -Path "qt-everywhere-src.zip" -DestinationPath "./${{env.QT_VERSION}}" -Force
+
+        # 调用编译脚本（修正了路径传递方式）
         $buildScript = Join-Path $repoRoot "build-Qt6\build-Qt6msvc2022_64.cmd"
-        cmd /c "set `"QT_PATH=$qtPath`" && call `"$buildScript`""
+        if (-not (Test-Path $buildScript)) {
+          Write-Error "Build script not found: $buildScript"
+          exit 1
+        }
+        Write-Host "Running build script: $buildScript"
+        $env:QT_PATH = (Get-Location).Path
+        cmd /c "`"$buildScript`""
 
-    # 打包
+    # 8. 打包（修复了 7z 路径和文件名）
     - name: Package binaries
       run: |
-        #ls     #Directory: D:\a\buildQt\buildQt(即仓库目录)
-        7z a Qt_${{env.QT_VERSION}}-${{env.FILE_NAME}}.7z ../Qt/${{env.QT_VERSION}}-static -mx=9
+        $archiveName = "Qt_${{env.QT_VERSION}}-${{env.FILE_NAME}}.7z"
+        $qtStaticPath = "${{env.QT_ROOT}}"
+        Write-Host "Packing $qtStaticPath to $archiveName"
+        7z a $archiveName $qtStaticPath -mx=9
 
-    # 上传
-    - uses: actions/upload-artifact@v7
+    # 9. 上传 artifacts
+    - name: Upload artifacts
+      uses: actions/upload-artifact@v7
       with:
         name: Qt_${{env.QT_VERSION}}-${{env.FILE_NAME}}
         path: Qt_${{env.QT_VERSION}}-${{env.FILE_NAME}}.7z
+        retention-days: 30
 
-    # 发布
-    - name: TempRelease
+    # 10. 发布到 Release（修复了 tag 命名，避免特殊字符）
+    - name: Create Release
       uses: softprops/action-gh-release@v2
       with:
-        tag_name: temp_Qt_${{env.QT_VERSION}}-${{env.FILE_NAME}}
-        release_name: TempRelease_Qt_${{env.QT_VERSION}}-${{env.FILE_NAME}}
+        tag_name: "temp-qt-${{env.QT_VERSION}}-${{env.FILE_NAME}}"
+        name: "Temp Release: Qt ${{env.QT_VERSION}} ${{env.FILE_NAME}}"
         files: Qt_${{env.QT_VERSION}}-${{env.FILE_NAME}}.7z
+        prerelease: true
