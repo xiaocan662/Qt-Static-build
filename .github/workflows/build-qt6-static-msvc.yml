@@ -262,7 +262,7 @@ jobs:
 
           # 强依赖：基础模块被跳过时，依赖它的模块也必须跳过
           $dependentMap = @{
-            'qtshadertools' = @('qtcanvaspainter')
+            'qtshadertools' = @('qtcanvaspainter', 'qtmultimedia')
             'qtpositioning' = @('qtlocation')
             'qtwebengine'   = @('qtwebview')
             'qtquick3d'     = @('qtquick3dphysics')
