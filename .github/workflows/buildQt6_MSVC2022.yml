@@ -51,13 +51,14 @@ jobs:
           $qtMinor = $qtFull -replace '^(\d+\.\d+).*', '$1'
         } else {
           # 自动获取最新版本
-          $qtMinor = (curl -s https://download.qt.io/official_releases/qt/ | `
+          $qtMirror = "https://mirrors.aliyun.com/qt"
+          $qtMinor = (curl -s "$qtMirror/official_releases/qt/" | `
             Select-String -Pattern '\d+\.\d+/' | `
             ForEach-Object { [regex]::Match($_, '\d+\.\d+').Value } | `
             Sort-Object { [version]$_ } -Descending | `
             Select-Object -First 1)
           
-          $qtFull = (curl -s "https://download.qt.io/official_releases/qt/$qtMinor/" | `
+          $qtFull = (curl -s "$qtMirror/official_releases/qt/$qtMinor/" | `
             Select-String -Pattern '\d+\.\d+\.\d+/' | `
             ForEach-Object { [regex]::Match($_, '\d+\.\d+\.\d+').Value } | `
             Sort-Object { [version]$_ } -Descending | `
@@ -84,7 +85,7 @@ jobs:
 
         # 下载源代码（使用 TLS 1.2 避免下载失败）
         [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
-        $url = "https://download.qt.io/official_releases/qt/${{env.QT_VERSION2}}/${{env.QT_VERSION}}/single/qt-everywhere-src-${{env.QT_VERSION}}.zip"
+        $url = "https://mirrors.aliyun.com/qt/official_releases/qt/${{env.QT_VERSION2}}/${{env.QT_VERSION}}/single/qt-everywhere-src-${{env.QT_VERSION}}.zip"
         Write-Host "Downloading Qt from: $url"
         Invoke-WebRequest -Uri $url -OutFile "qt-everywhere-src.zip" -UseBasicParsing
 
