@@ -1,0 +1,426 @@
+name: Build Static Qt6 (MSVC 2022)
+
+on:
+  workflow_dispatch:
+    inputs:
+      qt_version:
+        description: 'Qt 6 版本号 (例如 6.8.0，留空自动使用最新版)'
+        required: false
+        default: ''
+        type: string
+      skip_modules:
+        description: '额外跳过的模块 (逗号分隔，仅对当前版本源码中存在的模块生效)'
+        required: false
+        default: ''
+        type: string
+      parallel_jobs:
+        description: '并行编译线程数'
+        required: false
+        default: '4'
+        type: string
+      create_release:
+        description: '创建 GitHub Release 并上传编译产物'
+        required: true
+        default: true
+        type: boolean
+      release_tag:
+        description: 'Release 标签 (留空则自动生成 qt6-static-msvc-<version>)'
+        required: false
+        default: ''
+        type: string
+
+permissions:
+  contents: write
+
+env:
+  QT_PREFIX: C:\Qt\static-msvc2022
+  QT_SRC_DIR: C:\Qt\src
+  HEARTBEAT_SEC: 120
+  # 默认跳过名单：仅当当前版本源码中存在对应子目录时才 -skip
+  DEFAULT_SKIP_MODULES: qtwebengine,qtpdf,qt3d,qtcharts,qtdatavis3d,qtgraphs,qtlottie,qtmqtt,qtnetworkauth,qtpositioning,qtquick3d,qtquick3dphysics,qtremoteobjects,qtscxml,qtsensors,qtserialbus,qtserialport,qtshadertools,qtspeech,qtvirtualkeyboard,qtwayland,qtwebchannel,qtwebsockets,qtwebview,qtdoc,qtgrpc,qthttpserver,qtcoap,qtlanguageserver
+
+jobs:
+  build:
+    name: Build Qt ${{ inputs.qt_version != '' && inputs.qt_version || 'latest' }} (Static / MSVC 2022)
+    runs-on: windows-latest
+    timeout-minutes: 360
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        shell: pwsh
+        run: |
+          function Write-Progress([string]$Message) {
+            Write-Host "[$(Get-Date -Format 'HH:mm:ss')] $Message"
+          }
+
+          Write-Progress '开始安装构建依赖 (Perl, JOM, 7-Zip)...'
+          $sw = [Diagnostics.Stopwatch]::StartNew()
+          choco install strawberryperl jom 7zip -y --no-progress
+          Write-Progress "依赖安装完成 ($([math]::Round($sw.Elapsed.TotalMinutes, 1)) 分钟)"
+
+      - name: Setup MSVC 2022 environment
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Resolve Qt version
+        shell: pwsh
+        env:
+          QT_VERSION_INPUT: ${{ inputs.qt_version }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          function Write-Progress([string]$Message) {
+            Write-Host "[$(Get-Date -Format 'HH:mm:ss')] $Message"
+          }
+
+          function Get-DirectoryNames {
+            param([string]$Url)
+            $response = Invoke-WebRequest -Uri $Url -UseBasicParsing
+            [regex]::Matches($response.Content, 'href="([^"/]+)/"') |
+              ForEach-Object { $_.Groups[1].Value } |
+              Where-Object { $_ -notmatch '^\.' }
+          }
+
+          function Test-QtSourceArchive {
+            param([string]$Version)
+            $parts = $Version.Split('.')
+            $majorMinor = "$($parts[0]).$($parts[1])"
+            $archive = "qt-everywhere-src-$Version.tar.xz"
+            $urls = @(
+              "https://download.qt.io/official_releases/qt/$majorMinor/$Version/single/$archive",
+              "https://mirrors.tuna.tsinghua.edu.cn/qt/official_releases/qt/$majorMinor/$Version/single/$archive"
+            )
+            foreach ($url in $urls) {
+              try {
+                $response = Invoke-WebRequest -Uri $url -Method Head -UseBasicParsing
+                if ($response.StatusCode -ge 200 -and $response.StatusCode -lt 300) {
+                  return $true
+                }
+              } catch {
+                continue
+              }
+            }
+            return $false
+          }
+
+          function Get-LatestQt6Version {
+            $baseUrl = "https://download.qt.io/official_releases/qt/"
+            $minorVersions = Get-DirectoryNames $baseUrl |
+              Where-Object { $_ -match '^6\.\d+$' } |
+              ForEach-Object { [version]$_ } |
+              Sort-Object -Descending
+
+            if (-not $minorVersions) {
+              throw "无法在 Qt 官方源中找到 Qt 6 版本目录"
+            }
+
+            foreach ($minor in $minorVersions) {
+              $minorLabel = "$($minor.Major).$($minor.Minor)"
+              $minorUrl = "$baseUrl$minorLabel/"
+              $patchVersions = Get-DirectoryNames $minorUrl |
+                Where-Object { $_ -match '^6\.\d+\.\d+$' } |
+                ForEach-Object { [version]$_ } |
+                Sort-Object -Descending
+
+              foreach ($patch in $patchVersions) {
+                $version = "$($patch.Major).$($patch.Minor).$($patch.Build)"
+                if (Test-QtSourceArchive $version) {
+                  return $version
+                }
+              }
+            }
+
+            throw "无法解析可用的最新 Qt 6 源码版本"
+          }
+
+          if ([string]::IsNullOrWhiteSpace($env:QT_VERSION_INPUT)) {
+            Write-Progress '未指定版本，正在查询最新 Qt 6...'
+            $qtVersion = Get-LatestQt6Version
+            Write-Progress "将使用最新 Qt 6: $qtVersion"
+          } else {
+            $qtVersion = $env:QT_VERSION_INPUT.Trim()
+            $parts = $qtVersion.Split('.')
+            if ($parts.Count -lt 3 -or $parts[0] -ne '6') {
+              throw "版本号格式应为 Qt 6 的 major.minor.patch，例如 6.8.0"
+            }
+            Write-Progress "正在校验 Qt $qtVersion 源码包..."
+            if (-not (Test-QtSourceArchive $qtVersion)) {
+              throw "未找到 Qt 6 源码包: qt-everywhere-src-$qtVersion.tar.xz"
+            }
+            Write-Progress "将使用指定版本: $qtVersion"
+          }
+
+          "QT_VERSION=$qtVersion" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Download and extract Qt source
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          function Write-Progress([string]$Message) {
+            Write-Host "[$(Get-Date -Format 'HH:mm:ss')] $Message"
+          }
+
+          function Wait-ProcessWithHeartbeat {
+            param(
+              [System.Diagnostics.Process]$Process,
+              [string]$Label,
+              [string]$WatchFile = '',
+              [int]$IntervalSec = [int]$env:HEARTBEAT_SEC
+            )
+            $start = Get-Date
+            $lastBeat = $start
+            while (-not $Process.HasExited) {
+              Start-Sleep -Seconds 30
+              if (((Get-Date) - $lastBeat).TotalSeconds -lt $IntervalSec) { continue }
+              $min = [math]::Round(((Get-Date) - $start).TotalMinutes, 1)
+              $extra = ''
+              if ($WatchFile -and (Test-Path $WatchFile)) {
+                $extra = " | $([math]::Round((Get-Item $WatchFile).Length / 1MB, 1)) MB"
+              }
+              Write-Progress "$Label | 已运行 ${min} 分钟$extra"
+              $lastBeat = Get-Date
+            }
+            if ($Process.ExitCode -ne 0) {
+              throw "$Label 失败，退出码 $($Process.ExitCode)"
+            }
+          }
+
+          $QT_VERSION = $env:QT_VERSION
+          $parts = $QT_VERSION.Split('.')
+          $majorMinor = "$($parts[0]).$($parts[1])"
+
+          $archive = "qt-everywhere-src-$QT_VERSION.tar.xz"
+          $baseUrl = "https://download.qt.io/official_releases/qt/$majorMinor/$QT_VERSION/single"
+          $mirrors = @(
+            "$baseUrl/$archive",
+            "https://mirrors.tuna.tsinghua.edu.cn/qt/official_releases/qt/$majorMinor/$QT_VERSION/single/$archive"
+          )
+
+          New-Item -ItemType Directory -Force -Path $env:QT_SRC_DIR | Out-Null
+          $archivePath = Join-Path $env:QT_SRC_DIR $archive
+          $downloaded = $false
+
+          foreach ($url in $mirrors) {
+            if (Test-Path $archivePath) { Remove-Item $archivePath -Force }
+            Write-Progress "开始下载 Qt 源码"
+            $sw = [Diagnostics.Stopwatch]::StartNew()
+            $proc = Start-Process -FilePath curl.exe -ArgumentList @(
+              '-L', '-f', '--retry', '3', '--retry-delay', '5',
+              '-o', $archivePath, $url
+            ) -PassThru -NoNewWindow
+            try {
+              Wait-ProcessWithHeartbeat -Process $proc -Label '下载中' -WatchFile $archivePath
+              $downloaded = $true
+              Write-Progress "下载完成 ($([math]::Round($sw.Elapsed.TotalMinutes, 1)) 分钟, $([math]::Round((Get-Item $archivePath).Length / 1MB, 1)) MB)"
+              break
+            } catch {
+              Write-Progress "当前镜像失败，尝试下一个"
+            }
+          }
+
+          if (-not $downloaded) { throw "无法从官方或镜像下载 Qt 源码" }
+
+          $extractDir = Join-Path $env:QT_SRC_DIR "qt-everywhere-src-$QT_VERSION"
+          if (Test-Path $extractDir) { Remove-Item $extractDir -Recurse -Force }
+
+          Write-Progress '开始解压源码'
+          $sw = [Diagnostics.Stopwatch]::StartNew()
+          $proc = Start-Process -FilePath tar.exe -ArgumentList @(
+            '-xf', $archivePath, '-C', $env:QT_SRC_DIR
+          ) -PassThru -NoNewWindow
+          Wait-ProcessWithHeartbeat -Process $proc -Label '解压中'
+          Write-Progress "解压完成 ($([math]::Round($sw.Elapsed.TotalMinutes, 1)) 分钟)"
+
+          if (-not (Test-Path $extractDir)) { throw "解压后未找到目录: $extractDir" }
+          "QT_SOURCE_PATH=$extractDir" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          Write-Progress "源码就绪: $extractDir"
+
+      - name: Prepare configure options
+        shell: pwsh
+        env:
+          EXTRA_SKIP: ${{ inputs.skip_modules }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $wishlist = $env:DEFAULT_SKIP_MODULES.Split(',') |
+            ForEach-Object { $_.Trim() } |
+            Where-Object { $_ }
+
+          $extraList = @()
+          if (-not [string]::IsNullOrWhiteSpace($env:EXTRA_SKIP)) {
+            $extraList = $env:EXTRA_SKIP.Split(',') | ForEach-Object { $_.Trim() } | Where-Object { $_ }
+            $wishlist += $extraList
+          }
+
+          $wishlist = $wishlist | Select-Object -Unique
+
+          $availableModules = Get-ChildItem -Path $env:QT_SOURCE_PATH -Directory |
+            Where-Object { $_.Name -match '^qt[a-z0-9]+$' } |
+            ForEach-Object { $_.Name } |
+            Sort-Object
+
+          $skipModules = $wishlist | Where-Object { $_ -in $availableModules } | Sort-Object
+          $notPresentCount = @($wishlist | Where-Object { $_ -notin $availableModules }).Count
+          $extraMissing = $extraList | Where-Object { $_ -notin $availableModules } | Sort-Object
+
+          Write-Host "[$(Get-Date -Format 'HH:mm:ss')] 源码含 $($availableModules.Count) 个模块，将跳过 $($skipModules.Count) 个"
+          if ($notPresentCount -gt 0) {
+            Write-Host "[$(Get-Date -Format 'HH:mm:ss')] 另有 $notPresentCount 个模块在当前版本中不存在，已忽略"
+          }
+
+          foreach ($module in $extraMissing) {
+            Write-Host "::warning::额外指定的模块在当前源码中不存在，已忽略: $module"
+          }
+
+          $skipArgs = ($skipModules | ForEach-Object { "-skip $_" }) -join ' '
+          "CONFIGURE_SKIP_ARGS=$skipArgs" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "SKIPPED_MODULES=$($skipModules -join ',')" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Configure Qt (static + static runtime)
+        shell: cmd
+        run: |
+          cd /d "%QT_SOURCE_PATH%"
+          echo [%TIME%] 开始配置 Qt %QT_VERSION% ...
+          call configure.bat -prefix "%QT_PREFIX%" -static -static-runtime -release -opensource -confirm-license -nomake examples -nomake tests -platform win32-msvc %CONFIGURE_SKIP_ARGS%
+          echo [%TIME%] 配置完成
+
+      - name: Build Qt
+        shell: cmd
+        run: |
+          cd /d "%QT_SOURCE_PATH%"
+          echo [%TIME%] 开始编译 Qt (并行 ${{ inputs.parallel_jobs }})，此步骤耗时最长 ...
+          jom -j ${{ inputs.parallel_jobs }}
+          echo [%TIME%] 编译完成
+
+      - name: Install Qt to prefix
+        shell: cmd
+        run: |
+          cd /d "%QT_SOURCE_PATH%"
+          echo [%TIME%] 开始安装到 %QT_PREFIX% ...
+          jom install
+          echo [%TIME%] 安装完成
+
+      - name: Package build output
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          function Write-Progress([string]$Message) {
+            Write-Host "[$(Get-Date -Format 'HH:mm:ss')] $Message"
+          }
+
+          function Wait-ProcessWithHeartbeat {
+            param(
+              [System.Diagnostics.Process]$Process,
+              [string]$Label,
+              [string]$WatchFile = '',
+              [int]$IntervalSec = [int]$env:HEARTBEAT_SEC
+            )
+            $start = Get-Date
+            $lastBeat = $start
+            while (-not $Process.HasExited) {
+              Start-Sleep -Seconds 30
+              if (((Get-Date) - $lastBeat).TotalSeconds -lt $IntervalSec) { continue }
+              $min = [math]::Round(((Get-Date) - $start).TotalMinutes, 1)
+              $extra = ''
+              if ($WatchFile -and (Test-Path $WatchFile)) {
+                $extra = " | $([math]::Round((Get-Item $WatchFile).Length / 1MB, 1)) MB"
+              }
+              Write-Progress "$Label | 已运行 ${min} 分钟$extra"
+              $lastBeat = Get-Date
+            }
+            if ($Process.ExitCode -ne 0) {
+              throw "$Label 失败，退出码 $($Process.ExitCode)"
+            }
+          }
+
+          $tag = '${{ inputs.release_tag }}'
+          if ([string]::IsNullOrWhiteSpace($tag)) {
+            $tag = "qt6-static-msvc-$($env:QT_VERSION)"
+          }
+
+          $artifactName = "$tag-win64"
+          $archivePath = "$env:RUNNER_TEMP\$artifactName.7z"
+          if (Test-Path $archivePath) { Remove-Item $archivePath -Force }
+
+          Write-Progress '开始压缩产物'
+          $sw = [Diagnostics.Stopwatch]::StartNew()
+          $proc = Start-Process -FilePath 7z.exe -ArgumentList @(
+            'a', '-t7z', '-mx=9', $archivePath, "$env:QT_PREFIX\*"
+          ) -PassThru -NoNewWindow
+          Wait-ProcessWithHeartbeat -Process $proc -Label '压缩中' -WatchFile $archivePath
+          $sizeMB = [math]::Round((Get-Item $archivePath).Length / 1MB, 2)
+          Write-Progress "压缩完成 ($([math]::Round($sw.Elapsed.TotalMinutes, 1)) 分钟, ${sizeMB} MB)"
+
+          if ($sizeMB -gt 1900) {
+            Write-Warning "压缩包接近 GitHub 单文件 2GB 限制。若上传失败，请减少编译模块或拆分产物。"
+          }
+
+          "ARTIFACT_PATH=$archivePath" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "RELEASE_TAG=$tag" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "ARTIFACT_NAME=$artifactName" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.ARTIFACT_NAME }}
+          path: ${{ env.ARTIFACT_PATH }}
+          retention-days: 14
+          if-no-files-found: error
+
+      - name: Create GitHub Release
+        if: ${{ inputs.create_release }}
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.RELEASE_TAG }}
+          name: Qt6 Static MSVC2022 ${{ env.QT_VERSION }}
+          body: |
+            ## Qt6 静态库 (MSVC 2022 / x64)
+
+            | 项目 | 值 |
+            |------|-----|
+            | Qt 版本 | `${{ env.QT_VERSION }}` |
+            | 工具链 | MSVC 2022 (静态链接 CRT) |
+            | 安装前缀 | `C:\Qt\static-msvc2022` |
+            | 构建时间 | ${{ github.run_started_at }} |
+            | Workflow Run | ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }} |
+
+            ### 使用方法
+
+            1. 下载 `.7z` 并解压到本地目录（例如 `C:\Qt\static-msvc2022`）
+            2. 在 CMake 项目中设置：
+               ```cmake
+               set(CMAKE_PREFIX_PATH "C:/Qt/static-msvc2022")
+               ```
+            3. 或在 qmake 项目中：
+               ```bat
+               set PATH=C:\Qt\static-msvc2022\bin;%PATH%
+               ```
+
+            ### 说明
+
+            - 已根据当前版本源码动态跳过大型/可选模块（详见 Workflow 日志中的 Skip 列表）
+            - 完整静态构建通常需要 2~6 小时，受 GitHub Runner 性能影响
+          files: ${{ env.ARTIFACT_PATH }}
+          draft: false
+          prerelease: false
+          generate_release_notes: false
+
+      - name: Build summary
+        shell: pwsh
+        run: |
+          @"
+          ## Build Summary
+
+          - **Qt Version**: ${{ env.QT_VERSION }}
+          - **Skipped Modules**: ${{ env.SKIPPED_MODULES }}
+          - **Prefix**: $env:QT_PREFIX
+          - **Artifact**: $env:ARTIFACT_NAME.7z
+          - **Release Tag**: $env:RELEASE_TAG
+          - **Release Created**: ${{ inputs.create_release }}
+          "@ | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8
