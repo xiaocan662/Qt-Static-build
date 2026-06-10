@@ -38,7 +38,7 @@ env:
   QT_BUILD_DIR: C:\Qt\build
   HEARTBEAT_SEC: 120
   # 默认跳过名单：仅当当前版本源码中存在对应子目录时才 -skip
-  DEFAULT_SKIP_MODULES: qtwebengine,qtpdf,qt3d,qtcharts,qtdatavis3d,qtgraphs,qtlottie,qtmqtt,qtnetworkauth,qtpositioning,qtquick3d,qtquick3dphysics,qtremoteobjects,qtscxml,qtsensors,qtserialbus,qtserialport,qtshadertools,qtcanvaspainter,qtspeech,qtvirtualkeyboard,qtwayland,qtwebchannel,qtwebsockets,qtwebview,qtdoc,qtgrpc,qthttpserver,qtcoap,qtlanguageserver
+  DEFAULT_SKIP_MODULES: qtwebengine,qtpdf,qt3d,qtcharts,qtdatavis3d,qtgraphs,qtlottie,qtmqtt,qtnetworkauth,qtpositioning,qtlocation,qtquick3d,qtquick3dphysics,qtremoteobjects,qtscxml,qtsensors,qtserialbus,qtserialport,qtshadertools,qtcanvaspainter,qtspeech,qtvirtualkeyboard,qtwayland,qtwebchannel,qtwebsockets,qtwebview,qtdoc,qtgrpc,qthttpserver,qtcoap,qtlanguageserver,qtconnectivity
 
 jobs:
   build:
@@ -260,6 +260,30 @@ jobs:
 
           $wishlist = $wishlist | Select-Object -Unique
 
+          # 强依赖：基础模块被跳过时，依赖它的模块也必须跳过
+          $dependentMap = @{
+            'qtshadertools' = @('qtcanvaspainter')
+            'qtpositioning' = @('qtlocation')
+            'qtwebengine'   = @('qtwebview')
+            'qtquick3d'     = @('qtquick3dphysics')
+          }
+
+          $changed = $true
+          while ($changed) {
+            $changed = $false
+            foreach ($base in $dependentMap.Keys) {
+              if ($base -notin $wishlist) { continue }
+              foreach ($dependent in $dependentMap[$base]) {
+                if ($dependent -notin $wishlist) {
+                  $wishlist += $dependent
+                  $changed = $true
+                  Write-Host "[$(Get-Date -Format 'HH:mm:ss')] 自动追加跳过: $dependent (依赖已跳过的 $base)"
+                }
+              }
+            }
+            $wishlist = $wishlist | Select-Object -Unique
+          }
+
           $availableModules = Get-ChildItem -Path $env:QT_SOURCE_PATH -Directory |
             Where-Object { $_.Name -match '^qt[a-z0-9]+$' } |
             ForEach-Object { $_.Name } |
@@ -291,7 +315,11 @@ jobs:
           echo [%TIME%] 开始配置 Qt %QT_VERSION% (NMake + 源码外构建) ...
           call "%QT_SOURCE_PATH%\configure.bat" -prefix "%QT_PREFIX%" -static -static-runtime -release -opensource -confirm-license -nomake examples -nomake tests -platform win32-msvc -cmake-generator "NMake Makefiles" %CONFIGURE_SKIP_ARGS%
           if errorlevel 1 (
-            echo [%TIME%] 配置失败
+            echo [%TIME%] 配置失败 (configure.bat 返回非零)
+            exit /b 1
+          )
+          if not exist Makefile (
+            echo [%TIME%] 配置失败: 未生成 Makefile
             exit /b 1
           )
           echo [%TIME%] 配置完成
