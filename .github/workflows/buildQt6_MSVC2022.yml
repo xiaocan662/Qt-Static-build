@@ -83,11 +83,15 @@ jobs:
         New-Item -ItemType Directory -Path "./${{env.QT_VERSION}}" -Force | Out-Null
         New-Item -ItemType Directory -Path "./${{env.QT_VERSION}}-static" -Force | Out-Null
 
-        # 下载源代码（使用 TLS 1.2 避免下载失败）
+        # 下载源代码（使用 TLS 1.2 + WebClient 避免 Invoke-WebRequest 进度条导致大文件下载极慢）
         [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
         $url = "https://mirrors.aliyun.com/qt/official_releases/qt/${{env.QT_VERSION2}}/${{env.QT_VERSION}}/single/qt-everywhere-src-${{env.QT_VERSION}}.zip"
         Write-Host "Downloading Qt from: $url"
-        Invoke-WebRequest -Uri $url -OutFile "qt-everywhere-src.zip" -UseBasicParsing
+        $ProgressPreference = 'SilentlyContinue'
+        $wc = New-Object System.Net.WebClient
+        $wc.Headers.Add('User-Agent', 'Mozilla/5.0')
+        $wc.DownloadFile($url, "$qtBase\qt-everywhere-src.zip")
+        $wc.Dispose()
 
         # 解压源代码（Windows 原生支持）
         Expand-Archive -Path "qt-everywhere-src.zip" -DestinationPath "./${{env.QT_VERSION}}" -Force
