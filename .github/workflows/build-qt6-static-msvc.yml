@@ -35,9 +35,10 @@ permissions:
 env:
   QT_PREFIX: C:\Qt\static-msvc2022
   QT_SRC_DIR: C:\Qt\src
+  QT_BUILD_DIR: C:\Qt\build
   HEARTBEAT_SEC: 120
   # 默认跳过名单：仅当当前版本源码中存在对应子目录时才 -skip
-  DEFAULT_SKIP_MODULES: qtwebengine,qtpdf,qt3d,qtcharts,qtdatavis3d,qtgraphs,qtlottie,qtmqtt,qtnetworkauth,qtpositioning,qtquick3d,qtquick3dphysics,qtremoteobjects,qtscxml,qtsensors,qtserialbus,qtserialport,qtshadertools,qtspeech,qtvirtualkeyboard,qtwayland,qtwebchannel,qtwebsockets,qtwebview,qtdoc,qtgrpc,qthttpserver,qtcoap,qtlanguageserver
+  DEFAULT_SKIP_MODULES: qtwebengine,qtpdf,qt3d,qtcharts,qtdatavis3d,qtgraphs,qtlottie,qtmqtt,qtnetworkauth,qtpositioning,qtquick3d,qtquick3dphysics,qtremoteobjects,qtscxml,qtsensors,qtserialbus,qtserialport,qtshadertools,qtcanvaspainter,qtspeech,qtvirtualkeyboard,qtwayland,qtwebchannel,qtwebsockets,qtwebview,qtdoc,qtgrpc,qthttpserver,qtcoap,qtlanguageserver
 
 jobs:
   build:
@@ -284,25 +285,43 @@ jobs:
       - name: Configure Qt (static + static runtime)
         shell: cmd
         run: |
-          cd /d "%QT_SOURCE_PATH%"
-          echo [%TIME%] 开始配置 Qt %QT_VERSION% ...
-          call configure.bat -prefix "%QT_PREFIX%" -static -static-runtime -release -opensource -confirm-license -nomake examples -nomake tests -platform win32-msvc %CONFIGURE_SKIP_ARGS%
+          if exist "%QT_BUILD_DIR%" rmdir /s /q "%QT_BUILD_DIR%"
+          mkdir "%QT_BUILD_DIR%"
+          cd /d "%QT_BUILD_DIR%"
+          echo [%TIME%] 开始配置 Qt %QT_VERSION% (NMake + 源码外构建) ...
+          call "%QT_SOURCE_PATH%\configure.bat" -prefix "%QT_PREFIX%" -static -static-runtime -release -opensource -confirm-license -nomake examples -nomake tests -platform win32-msvc -cmake-generator "NMake Makefiles" %CONFIGURE_SKIP_ARGS%
+          if errorlevel 1 (
+            echo [%TIME%] 配置失败
+            exit /b 1
+          )
           echo [%TIME%] 配置完成
 
       - name: Build Qt
         shell: cmd
         run: |
-          cd /d "%QT_SOURCE_PATH%"
+          cd /d "%QT_BUILD_DIR%"
+          if not exist Makefile (
+            echo [%TIME%] 错误: 未找到 Makefile，请检查 Configure 步骤是否成功
+            exit /b 1
+          )
           echo [%TIME%] 开始编译 Qt (并行 ${{ inputs.parallel_jobs }})，此步骤耗时最长 ...
           jom -j ${{ inputs.parallel_jobs }}
+          if errorlevel 1 (
+            echo [%TIME%] 编译失败
+            exit /b 1
+          )
           echo [%TIME%] 编译完成
 
       - name: Install Qt to prefix
         shell: cmd
         run: |
-          cd /d "%QT_SOURCE_PATH%"
+          cd /d "%QT_BUILD_DIR%"
           echo [%TIME%] 开始安装到 %QT_PREFIX% ...
           jom install
+          if errorlevel 1 (
+            echo [%TIME%] 安装失败
+            exit /b 1
+          )
           echo [%TIME%] 安装完成
 
       - name: Package build output
