@@ -7,11 +7,19 @@ IF "%QT_VERSION%"=="" SET QT_VERSION=6.10.3
 :: 设置MSVC版本代号
 SET MSVC_VERSION=msvc2022_64
 
-:: 设置MSVC2022环境
-CALL "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvarsall.bat" amd64
+:: 设置MSVC2022环境 - 若CI已通过 vsdevenv action 预置好环境则跳过
+IF "%VSINSTALLDIR%"=="" (
+    IF EXIST "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvarsall.bat" (
+        CALL "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvarsall.bat" amd64
+    ) ELSE IF EXIST "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvarsall.bat" (
+        CALL "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvarsall.bat" amd64
+    ) ELSE IF EXIST "C:\Program Files\Microsoft Visual Studio\2022\Professional\VC\Auxiliary\Build\vcvarsall.bat" (
+        CALL "C:\Program Files\Microsoft Visual Studio\2022\Professional\VC\Auxiliary\Build\vcvarsall.bat" amd64
+    )
+)
 
-:: 设置Qt文件夹路径
-SET QT_PATH=D:\a\Qt-Static-build\Qt
+:: 设置Qt文件夹路径 - 优先使用CI传入的QT_PATH环境变量
+IF "%QT_PATH%"=="" SET QT_PATH=%~dp0..\Qt
 
 ::----------以下无需修改----------
 

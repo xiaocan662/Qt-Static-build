@@ -58,27 +58,25 @@ jobs:
     # 构建Qt
     - name: Build Qt
       run: |
-        #ls     #Directory: D:\a\buildQt\buildQt(即仓库目录)
-        #D:\a\buildQt                                上级目录，这里当做根目录
-        #D:\a\buildQt\Qt                             Qt目录
-        #D:\a\buildQt\Qt\${{env.QT_VERSION}}         Qt目录源代码和build文件夹存放目录
-        #D:\a\buildQt\Qt\${{env.QT_VERSION}}-static  Qt安装目录
-        
-        # 创建文件夹
-        cd ..  #Directory: D:\a\buildQt
-        mkdir -p Qt
+        $repoRoot = $env:GITHUB_WORKSPACE
+        $parentDir = Split-Path $repoRoot -Parent
+        $qtBase = Join-Path $parentDir "Qt"
 
         # 创建文件夹
-        cd Qt   #Directory: D:\a\buildQt\Qt
-        mkdir -p ${{env.QT_VERSION}}
-        mkdir -p ${{env.QT_VERSION}}-static
+        if (-not (Test-Path $qtBase)) { New-Item -ItemType Directory -Path $qtBase | Out-Null }
+        Set-Location $qtBase
 
-        # 下载源代码并解压，源代码目录D:\a\buildQt\Qt\${{env.QT_VERSION}}\XXX
-        curl -L -o qt-everywhere-src.zip https://download.qt.io/official_releases/qt/${{env.QT_VERSION2}}/${{env.QT_VERSION}}/single/qt-everywhere-src-${{env.QT_VERSION}}.zip
-        unzip -q qt-everywhere-src.zip -d ./${{env.QT_VERSION}}
+        New-Item -ItemType Directory -Path "./${{env.QT_VERSION}}" -Force | Out-Null
+        New-Item -ItemType Directory -Path "./${{env.QT_VERSION}}-static" -Force | Out-Null
 
-        # 调用编译脚本
-        cmd.exe /c "call `"D:\a\Qt-Static-build\Qt-Static-build\build-Qt6\build-Qt6msvc2022_64.cmd`""
+        # 下载源代码并解压
+        curl -L -o qt-everywhere-src.zip "https://download.qt.io/official_releases/qt/${{env.QT_VERSION2}}/${{env.QT_VERSION}}/single/qt-everywhere-src-${{env.QT_VERSION}}.zip"
+        unzip -q qt-everywhere-src.zip -d "./${{env.QT_VERSION}}"
+
+        # 调用编译脚本（传入 QT_PATH 供脚本内部使用）
+        $qtPath = (Get-Location).Path
+        $buildScript = Join-Path $repoRoot "build-Qt6\build-Qt6msvc2022_64.cmd"
+        cmd /c "set `"QT_PATH=$qtPath`" && call `"$buildScript`""
 
     # 打包
     - name: Package binaries
