@@ -83,15 +83,58 @@ jobs:
         New-Item -ItemType Directory -Path "./${{env.QT_VERSION}}" -Force | Out-Null
         New-Item -ItemType Directory -Path "./${{env.QT_VERSION}}-static" -Force | Out-Null
 
-        # 下载源代码（使用 TLS 1.2 + WebClient 避免 Invoke-WebRequest 进度条导致大文件下载极慢）
+        # 下载源代码（异步下载 + 定时打印进度，避免大文件下载时长时间无日志看起来像卡住）
         [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
         $url = "https://mirrors.aliyun.com/qt/official_releases/qt/${{env.QT_VERSION2}}/${{env.QT_VERSION}}/single/qt-everywhere-src-${{env.QT_VERSION}}.zip"
+        $outFile = "$qtBase\qt-everywhere-src.zip"
         Write-Host "Downloading Qt from: $url"
+        Write-Host "Saving to: $outFile"
+
+        try {
+          $req = [System.Net.HttpWebRequest]::Create($url)
+          $req.Method = 'HEAD'
+          $req.UserAgent = 'Mozilla/5.0'
+          $resp = $req.GetResponse()
+          $totalBytes = $resp.ContentLength
+          $resp.Close()
+          Write-Host ("Expected size: {0:N2} MB" -f ($totalBytes / 1MB))
+        } catch {
+          $totalBytes = -1
+          Write-Host "HEAD failed, will download without total size."
+        }
+
         $ProgressPreference = 'SilentlyContinue'
         $wc = New-Object System.Net.WebClient
         $wc.Headers.Add('User-Agent', 'Mozilla/5.0')
-        $wc.DownloadFile($url, "$qtBase\qt-everywhere-src.zip")
+        $sw = [System.Diagnostics.Stopwatch]::StartNew()
+        $task = $wc.DownloadFileTaskAsync($url, $outFile)
+
+        while (-not $task.Wait(10000)) {
+          try {
+            $fi = Get-Item $outFile -ErrorAction SilentlyContinue
+            $cur = if ($fi) { $fi.Length } else { 0 }
+            $elapsed = $sw.Elapsed.TotalSeconds
+            $speed = if ($elapsed -gt 0) { $cur / $elapsed } else { 0 }
+            if ($totalBytes -gt 0) {
+              $pct = [math]::Min(100.0, [double]$cur / $totalBytes * 100)
+              Write-Host ("[{0}s] {1:N2} MB / {2:N2} MB  ({3:N1}%)  {4:N2} MB/s" -f `
+                [math]::Floor($elapsed), ($cur / 1MB), ($totalBytes / 1MB), $pct, ($speed / 1MB))
+            } else {
+              Write-Host ("[{0}s] {1:N2} MB downloaded, {2:N2} MB/s" -f `
+                [math]::Floor($elapsed), ($cur / 1MB), ($speed / 1MB))
+            }
+          } catch {}
+        }
+        $sw.Stop()
+
+        if ($task.IsFaulted) {
+          Write-Host "Download failed:"
+          Write-Host $task.Exception.ToString()
+          exit 1
+        }
         $wc.Dispose()
+        $finalSize = (Get-Item $outFile).Length
+        Write-Host ("Download done in {0:N0}s, final size {1:N2} MB" -f $sw.Elapsed.TotalSeconds, ($finalSize / 1MB))
 
         # 解压源代码（Windows 原生支持）
         Expand-Archive -Path "qt-everywhere-src.zip" -DestinationPath "./${{env.QT_VERSION}}" -Force
