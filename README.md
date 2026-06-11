@@ -14,7 +14,7 @@
 |------|------|
 | `qt_version` | QT 版本，如 `6.11.1`、`6.8.0`；留空自动使用最新版 |
 | **编译参数** | **必填**，完整 `configure.bat` 参数，直接复制下方推荐配置 |
-| `parallel_jobs` | 并行编译线程数；留空使用 jom 默认 |
+| `parallel_jobs` | 并行编译线程数；留空由 `cmake --build` 自动并行 |
 | `create_release` | 是否创建 GitHub Release（标签与标题按本次编译版本自动生成） |
 
 解压安装包到 `C:\Qt\static-msvc2022` 后，在 CMake 中设置：

@@ -13,7 +13,7 @@ on:
         required: true
         type: string
       parallel_jobs:
-        description: '并行编译线程数（留空则 jom 默认并行）'
+        description: '并行编译线程数（留空则 cmake --build 自动并行）'
         required: false
         default: ''
         type: string
@@ -304,18 +304,22 @@ jobs:
           }
 
           Set-Location $env:QT_BUILD_DIR
-          if (-not (Test-Path Makefile)) {
-            Write-Progress '错误: 未找到 Makefile，请检查 Configure 步骤是否成功'
+          if (-not (Test-Path CMakeCache.txt)) {
+            Write-Progress '错误: 未找到 CMakeCache.txt，请检查 Configure 步骤是否成功'
             exit 1
           }
 
           $parallel = '${{ inputs.parallel_jobs }}'
           if ($parallel) {
             Write-Progress "开始编译 Qt，并行 $parallel，此步骤耗时最长 ..."
-            & jom -j $parallel
+            & cmake --build . --parallel $parallel
           } else {
             Write-Progress '开始编译 Qt，此步骤耗时最长 ...'
-            & jom
+            & cmake --build . --parallel
+          }
+          if ($LASTEXITCODE -ne 0) {
+            Write-Progress '编译失败'
+            exit $LASTEXITCODE
           }
           Write-Progress '编译完成'
 
@@ -330,7 +334,11 @@ jobs:
 
           Set-Location $env:QT_BUILD_DIR
           Write-Progress "开始安装到 $env:QT_PREFIX ..."
-          & jom install
+          & cmake --install .
+          if ($LASTEXITCODE -ne 0) {
+            Write-Progress '安装失败'
+            exit $LASTEXITCODE
+          }
           Write-Progress '安装完成'
 
       - name: Package build output
