@@ -350,6 +350,17 @@ jobs:
             Write-Host "[$(Get-Date -Format 'HH:mm:ss')] $Message"
           }
 
+          function Add-GithubEnv {
+            param(
+              [Parameter(Mandatory)][string] $Name,
+              [Parameter(Mandatory)][string] $Value
+            )
+            $delimiter = "EOF_${Name}"
+            Add-Content -Path $env:GITHUB_ENV -Value "${Name}<<${delimiter}"
+            Add-Content -Path $env:GITHUB_ENV -Value $Value
+            Add-Content -Path $env:GITHUB_ENV -Value $delimiter
+          }
+
           function Wait-ProcessWithHeartbeat {
             param(
               [System.Diagnostics.Process]$Process,
@@ -424,10 +435,10 @@ jobs:
             Write-Warning "压缩包接近 GitHub 单文件 2GB 限制。若上传失败，请减少编译模块或拆分产物。"
           }
 
-          "ARTIFACT_PATH=$archivePath" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-          "RELEASE_TAG=$tag" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-          "RELEASE_NAME=$releaseName" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-          "ARTIFACT_NAME=$artifactName" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          Add-GithubEnv -Name 'ARTIFACT_PATH' -Value ($archivePath -replace '\\', '/')
+          Add-GithubEnv -Name 'RELEASE_TAG' -Value $tag
+          Add-GithubEnv -Name 'RELEASE_NAME' -Value $releaseName
+          Add-GithubEnv -Name 'ARTIFACT_NAME' -Value $artifactName
 
       - name: Upload workflow artifact
         uses: actions/upload-artifact@v4
