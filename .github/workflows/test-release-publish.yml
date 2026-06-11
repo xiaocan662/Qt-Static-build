@@ -1,0 +1,181 @@
+name: Test Release Publish
+
+on:
+  workflow_dispatch:
+    inputs:
+      qt_version:
+        description: '模拟 Qt 版本号（仅用于标签与 Release 标题）'
+        required: false
+        default: '6.11.1-test'
+        type: string
+      create_release:
+        description: '是否创建 GitHub Release（预发布）'
+        required: true
+        default: true
+        type: boolean
+      upload_artifact:
+        description: '是否上传 Workflow Artifact'
+        required: true
+        default: true
+        type: boolean
+
+permissions:
+  contents: write
+
+env:
+  QT_PREFIX: C:\Qt\static-msvc2022
+  HEARTBEAT_SEC: 120
+
+jobs:
+  test-publish:
+    name: Test package upload and release
+    runs-on: windows-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install 7-Zip
+        shell: pwsh
+        run: choco install 7zip -y --no-progress
+
+      - name: Create dummy Qt prefix
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $prefix = $env:QT_PREFIX
+          New-Item -ItemType Directory -Force -Path "$prefix\bin" | Out-Null
+          New-Item -ItemType Directory -Force -Path "$prefix\lib\cmake\Qt6" | Out-Null
+          New-Item -ItemType Directory -Force -Path "$prefix\include\QtCore" | Out-Null
+
+          @"
+          QT static build publish test stub
+          Run: ${{ github.run_id }}
+          Repository: ${{ github.repository }}
+          "@ | Set-Content -Path "$prefix\README-test.txt" -Encoding utf8
+
+          'stub' | Set-Content -Path "$prefix\bin\qmake.exe.txt" -Encoding utf8
+          'stub' | Set-Content -Path "$prefix\lib\Qt6Core.lib.txt" -Encoding utf8
+          'stub' | Set-Content -Path "$prefix\lib\cmake\Qt6\Qt6Config.cmake" -Encoding utf8
+
+          Write-Host "Dummy prefix ready at $prefix"
+
+      - name: Package test output
+        id: package
+        shell: pwsh
+        env:
+          QT_VERSION_INPUT: ${{ inputs.qt_version }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          function Write-Progress([string]$Message) {
+            Write-Host "[$(Get-Date -Format 'HH:mm:ss')] $Message"
+          }
+
+          function Add-GithubOutput {
+            param(
+              [Parameter(Mandatory)][string] $Name,
+              [Parameter(Mandatory)][string] $Value
+            )
+            $delimiter = "EOF_${Name}"
+            Add-Content -Path $env:GITHUB_OUTPUT -Value "${Name}<<${delimiter}"
+            Add-Content -Path $env:GITHUB_OUTPUT -Value $Value
+            Add-Content -Path $env:GITHUB_OUTPUT -Value $delimiter
+          }
+
+          function Wait-ProcessWithHeartbeat {
+            param(
+              [System.Diagnostics.Process]$Process,
+              [string]$Label,
+              [string]$WatchFile = '',
+              [int]$IntervalSec = [int]$env:HEARTBEAT_SEC
+            )
+            $start = Get-Date
+            $lastBeat = $start
+            while (-not $Process.HasExited) {
+              Start-Sleep -Seconds 30
+              if (((Get-Date) - $lastBeat).TotalSeconds -lt $IntervalSec) { continue }
+              $min = [math]::Round(((Get-Date) - $start).TotalMinutes, 1)
+              $extra = ''
+              if ($WatchFile -and (Test-Path $WatchFile)) {
+                $extra = " | $([math]::Round((Get-Item $WatchFile).Length / 1MB, 1)) MB"
+              }
+              Write-Progress "$Label | 已运行 ${min} 分钟$extra"
+              $lastBeat = Get-Date
+            }
+            if ($Process.ExitCode -ne 0) {
+              throw "$Label 失败，退出码 $($Process.ExitCode)"
+            }
+          }
+
+          $qtVersion = $env:QT_VERSION_INPUT.Trim()
+          $runId = $env:GITHUB_RUN_NUMBER
+          $baseTag = "test-qt-static-msvc-$qtVersion"
+          $tag = "$baseTag-run$runId"
+          $releaseName = "TEST QT Static MSVC2022 $qtVersion (run $runId)"
+          $artifactName = "$tag-win64"
+          $archivePath = "$env:RUNNER_TEMP\$artifactName.7z"
+          if (Test-Path $archivePath) { Remove-Item $archivePath -Force }
+
+          Write-Progress "Release 标签: $tag"
+          Write-Progress '开始压缩测试产物'
+          $sw = [Diagnostics.Stopwatch]::StartNew()
+          $proc = Start-Process -FilePath 7z.exe -ArgumentList @(
+            'a', '-t7z', '-mx=9', $archivePath, "$env:QT_PREFIX\*"
+          ) -PassThru -NoNewWindow
+          Wait-ProcessWithHeartbeat -Process $proc -Label '压缩中' -WatchFile $archivePath
+          $sizeMB = [math]::Round((Get-Item $archivePath).Length / 1MB, 2)
+          Write-Progress "压缩完成 ($([math]::Round($sw.Elapsed.TotalMinutes, 1)) 分钟, ${sizeMB} MB)"
+
+          Add-GithubOutput -Name 'archive_path' -Value ($archivePath -replace '\\', '/')
+          Add-GithubOutput -Name 'release_tag' -Value $tag
+          Add-GithubOutput -Name 'release_name' -Value $releaseName
+          Add-GithubOutput -Name 'artifact_name' -Value $artifactName
+          Add-GithubOutput -Name 'qt_version' -Value $qtVersion
+
+      - name: Upload workflow artifact
+        if: ${{ inputs.upload_artifact }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.package.outputs.artifact_name }}
+          path: ${{ steps.package.outputs.archive_path }}
+          retention-days: 3
+          if-no-files-found: error
+
+      - name: Create GitHub Release
+        if: ${{ inputs.create_release }}
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.package.outputs.release_tag }}
+          name: ${{ steps.package.outputs.release_name }}
+          body: |
+            ## 发布流程测试（非真实 Qt 编译产物）
+
+            | 项目 | 值 |
+            |------|-----|
+            | 类型 | **测试 Release** |
+            | 模拟 Qt 版本 | `${{ steps.package.outputs.qt_version }}` |
+            | Release 标签 | `${{ steps.package.outputs.release_tag }}` |
+            | Workflow Run | ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }} |
+
+            此 Release 由 **Test Release Publish** 工作流生成，用于验证压缩、Artifact 上传与 Release 发布逻辑。
+          files: ${{ steps.package.outputs.archive_path }}
+          draft: false
+          prerelease: true
+          generate_release_notes: false
+
+      - name: Test summary
+        shell: pwsh
+        run: |
+          @"
+          ## Test Release Publish Summary
+
+          - **Qt Version (mock)**: ${{ steps.package.outputs.qt_version }}
+          - **Artifact**: ${{ steps.package.outputs.artifact_name }}.7z
+          - **Release Tag**: ${{ steps.package.outputs.release_tag }}
+          - **Release Name**: ${{ steps.package.outputs.release_name }}
+          - **Upload Artifact**: ${{ inputs.upload_artifact }}
+          - **Create Release**: ${{ inputs.create_release }}
+          "@ | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8

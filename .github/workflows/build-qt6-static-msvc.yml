@@ -37,6 +37,11 @@ jobs:
     name: Build Qt ${{ inputs.qt_version != '' && inputs.qt_version || 'latest' }} (Static / MSVC 2022)
     runs-on: windows-latest
     timeout-minutes: 360
+    outputs:
+      qt_version: ${{ steps.resolve_version.outputs.qt_version }}
+      release_tag: ${{ steps.package.outputs.release_tag }}
+      release_name: ${{ steps.package.outputs.release_name }}
+      artifact_name: ${{ steps.package.outputs.artifact_name }}
     env:
       CONFIGURE_PARAMS: ${{ inputs.configure_params }}
 
@@ -62,6 +67,7 @@ jobs:
           arch: x64
 
       - name: Resolve Qt version
+        id: resolve_version
         shell: pwsh
         env:
           QT_VERSION_INPUT: ${{ inputs.qt_version }}
@@ -150,6 +156,7 @@ jobs:
           }
 
           "QT_VERSION=$qtVersion" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "qt_version=$qtVersion" >> $env:GITHUB_OUTPUT
 
       - name: Download and extract Qt source
         shell: pwsh
@@ -342,6 +349,7 @@ jobs:
           Write-Progress '安装完成'
 
       - name: Package build output
+        id: package
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
@@ -359,6 +367,17 @@ jobs:
             Add-Content -Path $env:GITHUB_ENV -Value "${Name}<<${delimiter}"
             Add-Content -Path $env:GITHUB_ENV -Value $Value
             Add-Content -Path $env:GITHUB_ENV -Value $delimiter
+          }
+
+          function Add-GithubOutput {
+            param(
+              [Parameter(Mandatory)][string] $Name,
+              [Parameter(Mandatory)][string] $Value
+            )
+            $delimiter = "EOF_${Name}"
+            Add-Content -Path $env:GITHUB_OUTPUT -Value "${Name}<<${delimiter}"
+            Add-Content -Path $env:GITHUB_OUTPUT -Value $Value
+            Add-Content -Path $env:GITHUB_OUTPUT -Value $delimiter
           }
 
           function Wait-ProcessWithHeartbeat {
@@ -440,31 +459,66 @@ jobs:
           Add-GithubEnv -Name 'RELEASE_NAME' -Value $releaseName
           Add-GithubEnv -Name 'ARTIFACT_NAME' -Value $artifactName
 
+          Add-GithubOutput -Name 'release_tag' -Value $tag
+          Add-GithubOutput -Name 'release_name' -Value $releaseName
+          Add-GithubOutput -Name 'artifact_name' -Value $artifactName
+
       - name: Upload workflow artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ env.ARTIFACT_NAME }}
+          name: ${{ steps.package.outputs.artifact_name }}
           path: ${{ env.ARTIFACT_PATH }}
           retention-days: 14
           if-no-files-found: error
 
+      - name: Build summary
+        shell: pwsh
+        run: |
+          @"
+          ## Build Summary
+
+          - **Qt Version**: ${{ steps.resolve_version.outputs.qt_version }}
+          - **Configure Params**: ${{ inputs.configure_params }}
+          - **Prefix**: $env:QT_PREFIX
+          - **Artifact**: ${{ steps.package.outputs.artifact_name }}.7z
+          - **Release Name**: ${{ steps.package.outputs.release_name }}
+          - **Release Tag**: ${{ steps.package.outputs.release_tag }}
+          - **Release Job**: ${{ inputs.create_release && 'publish (独立 job，失败不影响本 job)' || '已跳过' }}
+          "@ | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8
+
+  publish:
+    name: Publish GitHub Release
+    needs: build
+    if: ${{ inputs.create_release }}
+    runs-on: windows-latest
+    timeout-minutes: 30
+    continue-on-error: true
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download workflow artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.build.outputs.artifact_name }}
+          path: ${{ runner.temp }}/artifact
+
       - name: Create GitHub Release
-        if: ${{ inputs.create_release }}
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ env.RELEASE_TAG }}
-          name: ${{ env.RELEASE_NAME }}
+          tag_name: ${{ needs.build.outputs.release_tag }}
+          name: ${{ needs.build.outputs.release_name }}
           body: |
             ## QT 静态库 (MSVC 2022 / x64)
 
             | 项目 | 值 |
             |------|-----|
-            | Qt 版本 | `${{ env.QT_VERSION }}` |
-            | Release 标签 | `${{ env.RELEASE_TAG }}` |
+            | Qt 版本 | `${{ needs.build.outputs.qt_version }}` |
+            | Release 标签 | `${{ needs.build.outputs.release_tag }}` |
             | 工具链 | MSVC 2022 (静态链接 CRT) |
             | 安装前缀 | `C:\Qt\static-msvc2022` |
             | 构建时间 | ${{ github.run_started_at }} |
-            | Workflow Run | ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }} |
+            | Build Workflow Run | ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }} |
 
             ### 使用方法
 
@@ -476,22 +530,19 @@ jobs:
 
             - 编译参数为完整 `configure.bat` 参数，见 README 推荐配置
             - 完整静态构建通常需要 2~6 小时，受 GitHub Runner 性能影响
-          files: ${{ env.ARTIFACT_PATH }}
+          files: ${{ runner.temp }}/artifact/${{ needs.build.outputs.artifact_name }}.7z
           draft: false
           prerelease: false
           generate_release_notes: false
 
-      - name: Build summary
+      - name: Publish summary
+        if: always()
         shell: pwsh
         run: |
+          $status = if ('${{ job.status }}' -eq 'success') { '成功' } else { '失败（build job 仍视为成功，可从 Artifacts 下载）' }
           @"
-          ## Build Summary
+          ## Publish Summary
 
-          - **Qt Version**: ${{ env.QT_VERSION }}
-          - **Configure Params**: ${{ inputs.configure_params }}
-          - **Prefix**: $env:QT_PREFIX
-          - **Artifact**: $env:ARTIFACT_NAME.7z
-          - **Release Name**: ${{ env.RELEASE_NAME }}
-          - **Release Tag**: ${{ env.RELEASE_TAG }}
-          - **Release Created**: ${{ inputs.create_release }}
+          - **Status**: $status
+          - **Release Tag**: ${{ needs.build.outputs.release_tag }}
           "@ | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8

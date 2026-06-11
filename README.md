@@ -15,13 +15,29 @@
 | `qt_version` | QT 版本，如 `6.11.1`、`6.8.0`；留空自动使用最新版 |
 | **编译参数** | **必填**，完整 `configure.bat` 参数，直接复制下方推荐配置 |
 | `parallel_jobs` | 并行编译线程数；留空由 `cmake --build` 自动并行 |
-| `create_release` | 是否创建 GitHub Release（标签与标题按本次编译版本自动生成） |
+| `create_release` | 是否创建 GitHub Release（独立 job 执行，**失败不影响编译与 Artifacts**） |
 
 解压安装包到 `C:\Qt\static-msvc2022` 后，在 CMake 中设置：
 
 ```cmake
 set(CMAKE_PREFIX_PATH "C:/Qt/static-msvc2022")
 ```
+
+---
+
+## 测试发布流程（无需编译 Qt）
+
+在改发布逻辑或排查 Release 失败时，可单独运行：
+
+**Actions** → **Test Release Publish** → **Run workflow**
+
+| 参数 | 说明 |
+|------|------|
+| `qt_version` | 模拟版本号，仅用于标签/标题 |
+| `create_release` | 是否创建 **预发布** Release |
+| `upload_artifact` | 是否上传 Workflow Artifact |
+
+约 **1~3 分钟** 完成：生成占位目录 → 7z 压缩 → 上传 Artifact → 创建预发布 Release（标签形如 `test-qt-static-msvc-6.11.1-test-run42`）。
 
 ---
 
@@ -84,5 +100,6 @@ set(CMAKE_PREFIX_PATH "C:/Qt/static-msvc2022")
 - **编译参数为必填**，须包含 `-prefix` 等完整 configure 选项
 - `-prefix` 须为 `C:/Qt/static-msvc2022`，与打包安装路径一致
 - 完整静态编译通常需要 **2~6 小时**
-- GitHub Release 单文件上限 **2 GB**；若上传失败，可从 Artifacts 下载（保留 14 天）
+- GitHub Release 单文件上限 **2 GB**；若 Release 失败，**build job 仍成功**，可从 Artifacts 下载（保留 14 天）
+- Release 在独立 **publish** job 中创建（`continue-on-error`），发布失败不会导致整次编译作废
 - Release 标签按版本自动生成：`qt-static-msvc-<版本>`；若该标签已存在则自动追加 `-2`、`-3`…
