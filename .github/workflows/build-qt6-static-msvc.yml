@@ -279,11 +279,9 @@ jobs:
 
           $configureBat = Join-Path $env:QT_SOURCE_PATH 'configure.bat'
           $configureArgs = ConvertFrom-ConfigureArgv $env:CONFIGURE_PARAMS
-          $argString = ($configureArgs | ForEach-Object {
-            if ($_ -match '[\s"]') { '"{0}"' -f ($_ -replace '"', '""') } else { $_ }
-          }) -join ' '
 
-          cmd.exe /c "call `"$configureBat`" $argString"
+          Write-Progress "参数数量: $($configureArgs.Count)"
+          & $configureBat @configureArgs
           if ($LASTEXITCODE -ne 0) {
             Write-Progress '配置失败 (configure.bat 返回非零)'
             exit $LASTEXITCODE

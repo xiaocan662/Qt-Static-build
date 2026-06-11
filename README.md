@@ -25,43 +25,57 @@ set(CMAKE_PREFIX_PATH "C:/Qt/static-msvc2022")
 
 ---
 
-## 推荐编译参数（以 QT 6.11.1 为例，复制粘贴）
+## QT 6.11.1 推荐编译参数（复制粘贴）
 
-适用于 **QWidget / QML 本地桌面应用**，**不含嵌入式浏览器内核**（Chromium / WebEngine），并排除 IoT、地图、3D 等大型可选模块。其他版本请自行调整 `-skip` 列表。
+适用于 **QWidget / QML 本地桌面应用**，**不含嵌入式浏览器内核**，并排除 IoT、地图、3D、多媒体等大型可选模块。
+
+> 说明：`-skip` 支持逗号分隔多个模块（见 `qtyil.md` configure 帮助），下列参数已按 **强依赖关系** 一次性补全，避免 configure 因缺依赖模块而失败。
 
 **整段复制，粘贴到「编译参数」即可：**
 
 ```text
--prefix C:/Qt/static-msvc2022 -static -static-runtime -release -opensource -confirm-license -nomake examples -nomake tests -platform win32-msvc -cmake-generator "NMake Makefiles" -skip qtwebengine -skip qtwebview -skip qtwebchannel -skip qt3d -skip qtcharts -skip qtcoap -skip qtconnectivity -skip qtdatavis3d -skip qtdoc -skip qtgraphs -skip qtgrpc -skip qthttpserver -skip qtlanguageserver -skip qtlocation -skip qtpositioning -skip qtquick3d -skip qtquick3dphysics -skip qtremoteobjects -skip qtscxml -skip qtsensors -skip qtserialbus -skip qtserialport -skip qtshadertools -skip qtcanvaspainter -skip qtmultimedia -skip qtspeech -skip qtvirtualkeyboard -skip qtwayland -skip qtwebsockets -skip qtlottie -skip qtmqtt -skip qtnetworkauth
+-prefix C:/Qt/static-msvc2022 -static -static-runtime -release -opensource -confirm-license -nomake examples -nomake tests -platform win32-msvc -cmake-generator "NMake Makefiles" -skip qt3d,qtcanvaspainter,qtcharts,qtcoap,qtconnectivity,qtdatavis3d,qtdoc,qtgraphs,qtgrpc,qthttpserver,qtlanguageserver,qtlocation,qtlottie,qtmqtt,qtmultimedia,qtnetworkauth,qtopcua,qtopenapi,qtpositioning,qtprotobuf,qtquick3d,qtquick3dphysics,qtquickeffectmaker,qtremoteobjects,qtscxml,qtsensors,qtserialbus,qtserialport,qtshadertools,qtspeech,qttasktree,qtvirtualkeyboard,qtwayland,qtwebchannel,qtwebengine,qtwebsockets,qtwebview,qtpdf
 ```
 
-### 保留的主要模块
+### 保留的主要模块（未出现在 `-skip` 中）
 
 | 模块 | 用途 |
 |------|------|
 | `qtbase` | 核心：窗口、控件、网络、文件等 |
 | `qtdeclarative` | QML / Qt Quick |
+| `qtquicktimeline` | QML 时间线动画 |
 | `qtsvg` | SVG 图标 |
 | `qtimageformats` | PNG、JPEG 等图片格式 |
 | `qt5compat` | Qt5 兼容 API |
 | `qtactiveqt` | Windows COM / ActiveX |
 | `qttools` | moc、uic、rcc 等构建工具 |
 
-### 已排除的浏览器相关模块
+### 已排除模块及依赖说明
 
-| 模块 | 说明 |
-|------|------|
-| `qtwebengine` | 嵌入式 Chromium 浏览器内核 |
-| `qtwebview` | 依赖 WebEngine 的 WebView |
-| `qtwebchannel` | 常与 WebEngine 配合使用 |
+| 类别 | 模块 | 说明 |
+|------|------|------|
+| 浏览器 | `qtwebengine` | Chromium 内核，体积大、编译极慢 |
+| 浏览器 | `qtwebview` | 依赖 WebEngine |
+| 浏览器 | `qtwebchannel` | 常与 WebEngine 配合 |
+| 着色器链 | `qtshadertools` | 着色器工具（跳过后须一并跳过下列 3 项） |
+| 着色器链 | `qtcanvaspainter` | 强依赖 `qtshadertools` |
+| 着色器链 | `qtmultimedia` | 强依赖 `qtshadertools`（6.11） |
+| 着色器链 | `qtquickeffectmaker` | 强依赖 `qtshadertools` |
+| 定位链 | `qtpositioning` | 定位服务 |
+| 定位链 | `qtlocation` | 强依赖 `qtpositioning` |
+| 3D 链 | `qtquick3d` | 3D 渲染 |
+| 3D 链 | `qtquick3dphysics` | 依赖 `qtquick3d` |
+| 3D 链 | `qt3d` | 3D 引擎 |
+| 网络/IoT | `qtgrpc`,`qtprotobuf`,`qthttpserver`,`qtmqtt`,`qtcoap`,`qtnetworkauth` | gRPC / HTTP 服务 / IoT |
+| 工业/设备 | `qtserialport`,`qtserialbus`,`qtopcua`,`qtsensors` | 串口 / 工业协议 |
+| 其他可选 | `qtcharts`,`qtgraphs`,`qtdatavis3d`,`qtlottie`,`qtpdf`,`qtspeech`,`qtvirtualkeyboard`,`qttasktree`,`qtopenapi` 等 | 图表 / PDF / 语音 / 6.11 新模块 |
 
 ### 自定义说明
 
-- 编译其他 QT 版本：修改 `qt_version`，并按该版本模块依赖调整 `-skip` 参数
-- 不需要排除某模块：从参数中删除对应的 `-skip 模块名`
-- 需要额外排除：追加 `-skip 模块名`
-- 跳过 `qtshadertools` 时须同时 `-skip qtcanvaspainter`、`-skip qtmultimedia`（QT 6.11 推荐参数已包含）
-- 跳过 `qtpositioning` 时须同时 `-skip qtlocation`（推荐参数已包含）
+- **不需要排除某模块**：从 `-skip` 逗号列表中删除对应模块名
+- **需要额外排除**：在 `-skip` 列表末尾追加 `,模块名`
+- **需要多媒体**（`QMediaPlayer` 等）：从 `-skip` 中移除 `qtmultimedia,qtshadertools,qtcanvaspainter,qtquickeffectmaker`（编译时间显著增加）
+- **编译其他 QT 版本**：修改 `qt_version`；若该版本无某模块，configure 会自动忽略
 
 ---
 
@@ -71,4 +85,4 @@ set(CMAKE_PREFIX_PATH "C:/Qt/static-msvc2022")
 - `-prefix` 须为 `C:/Qt/static-msvc2022`，与打包安装路径一致
 - 完整静态编译通常需要 **2~6 小时**
 - GitHub Release 单文件上限 **2 GB**；若上传失败，可从 Artifacts 下载（保留 14 天）
-- Release 标签按版本自动生成：`qt-static-msvc-<版本>`；若该标签已存在则自动追加 `-2`、`-3`…（如 `qt-static-msvc-6.11.1-2`）
+- Release 标签按版本自动生成：`qt-static-msvc-<版本>`；若该标签已存在则自动追加 `-2`、`-3`…
