@@ -1,17 +1,16 @@
-name: Build Static Qt6 (MSVC 2022)
+name: Build Static QT (MSVC 2022)
 
 on:
   workflow_dispatch:
     inputs:
       qt_version:
-        description: 'Qt 6 版本号 (例如 6.8.0，留空自动使用最新版)'
+        description: 'QT 版本号 (例如 6.11.1，留空自动使用最新版)'
         required: false
         default: ''
         type: string
-      skip_modules:
-        description: '要跳过的模块 (逗号分隔，如 qtwebengine,qt3d；留空不跳过任何模块)'
-        required: false
-        default: ''
+      configure_params:
+        description: '编译参数（必填，完整 configure.bat 参数，见 README 推荐配置）'
+        required: true
         type: string
       parallel_jobs:
         description: '并行编译线程数（留空则 jom 默认并行）'
@@ -23,11 +22,6 @@ on:
         required: true
         default: true
         type: boolean
-      release_tag:
-        description: 'Release 标签 (留空则自动生成 qt6-static-msvc-<version>)'
-        required: false
-        default: ''
-        type: string
 
 permissions:
   contents: write
@@ -43,6 +37,8 @@ jobs:
     name: Build Qt ${{ inputs.qt_version != '' && inputs.qt_version || 'latest' }} (Static / MSVC 2022)
     runs-on: windows-latest
     timeout-minutes: 360
+    env:
+      CONFIGURE_PARAMS: ${{ inputs.configure_params }}
 
     steps:
       - name: Checkout repository
@@ -106,22 +102,22 @@ jobs:
             return $false
           }
 
-          function Get-LatestQt6Version {
+          function Get-LatestQtVersion {
             $baseUrl = "https://download.qt.io/official_releases/qt/"
             $minorVersions = Get-DirectoryNames $baseUrl |
-              Where-Object { $_ -match '^6\.\d+$' } |
+              Where-Object { $_ -match '^\d+\.\d+$' } |
               ForEach-Object { [version]$_ } |
               Sort-Object -Descending
 
             if (-not $minorVersions) {
-              throw "无法在 Qt 官方源中找到 Qt 6 版本目录"
+              throw "无法在 Qt 官方源中找到 QT 版本目录"
             }
 
             foreach ($minor in $minorVersions) {
               $minorLabel = "$($minor.Major).$($minor.Minor)"
               $minorUrl = "$baseUrl$minorLabel/"
               $patchVersions = Get-DirectoryNames $minorUrl |
-                Where-Object { $_ -match '^6\.\d+\.\d+$' } |
+                Where-Object { $_ -match '^\d+\.\d+\.\d+$' } |
                 ForEach-Object { [version]$_ } |
                 Sort-Object -Descending
 
@@ -133,22 +129,22 @@ jobs:
               }
             }
 
-            throw "无法解析可用的最新 Qt 6 源码版本"
+            throw "无法解析可用的最新 QT 源码版本"
           }
 
           if ([string]::IsNullOrWhiteSpace($env:QT_VERSION_INPUT)) {
-            Write-Progress '未指定版本，正在查询最新 Qt 6...'
-            $qtVersion = Get-LatestQt6Version
-            Write-Progress "将使用最新 Qt 6: $qtVersion"
+            Write-Progress '未指定版本，正在查询最新 QT...'
+            $qtVersion = Get-LatestQtVersion
+            Write-Progress "将使用最新 QT: $qtVersion"
           } else {
             $qtVersion = $env:QT_VERSION_INPUT.Trim()
             $parts = $qtVersion.Split('.')
-            if ($parts.Count -lt 3 -or $parts[0] -ne '6') {
-              throw "版本号格式应为 Qt 6 的 major.minor.patch，例如 6.8.0"
+            if ($parts.Count -lt 3) {
+              throw "版本号格式应为 major.minor.patch，例如 6.11.1"
             }
-            Write-Progress "正在校验 Qt $qtVersion 源码包..."
+            Write-Progress "正在校验 QT $qtVersion 源码包..."
             if (-not (Test-QtSourceArchive $qtVersion)) {
-              throw "未找到 Qt 6 源码包: qt-everywhere-src-$qtVersion.tar.xz"
+              throw "未找到 QT 源码包: qt-everywhere-src-$qtVersion.tar.xz"
             }
             Write-Progress "将使用指定版本: $qtVersion"
           }
@@ -239,53 +235,19 @@ jobs:
           "QT_SOURCE_PATH=$extractDir" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           Write-Progress "源码就绪: $extractDir"
 
-      - name: Prepare module skip options
-        shell: pwsh
-        env:
-          USER_SKIP_MODULES: ${{ inputs.skip_modules }}
-        run: |
-          $ErrorActionPreference = 'Stop'
-
-          if ([string]::IsNullOrWhiteSpace($env:USER_SKIP_MODULES)) {
-            Write-Host "[$(Get-Date -Format 'HH:mm:ss')] 未指定跳过模块"
-            "CONFIGURE_SKIP_ARGS=" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-            "SKIPPED_MODULES=无" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-            exit 0
-          }
-
-          $userList = $env:USER_SKIP_MODULES.Split(',') |
-            ForEach-Object { $_.Trim() } |
-            Where-Object { $_ } |
-            Select-Object -Unique
-
-          $availableModules = Get-ChildItem -Path $env:QT_SOURCE_PATH -Directory |
-            Where-Object { $_.Name -match '^qt[a-z0-9]+$' } |
-            ForEach-Object { $_.Name }
-
-          $skipModules = $userList | Where-Object { $_ -in $availableModules } | Sort-Object
-          $missingModules = $userList | Where-Object { $_ -notin $availableModules } | Sort-Object
-
-          Write-Host "[$(Get-Date -Format 'HH:mm:ss')] 将跳过 $($skipModules.Count) 个模块"
-          if ($skipModules.Count -gt 0) {
-            Write-Host "[$(Get-Date -Format 'HH:mm:ss')] $($skipModules -join ', ')"
-          }
-
-          foreach ($module in $missingModules) {
-            Write-Host "::warning::指定的模块在当前源码中不存在，已忽略: $module"
-          }
-
-          $skipArgs = ($skipModules | ForEach-Object { "-skip $_" }) -join ' '
-          "CONFIGURE_SKIP_ARGS=$skipArgs" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-          "SKIPPED_MODULES=$($skipModules -join ',')" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-
       - name: Configure Qt
         shell: cmd
         run: |
           if exist "%QT_BUILD_DIR%" rmdir /s /q "%QT_BUILD_DIR%"
           mkdir "%QT_BUILD_DIR%"
           cd /d "%QT_BUILD_DIR%"
+          if "%CONFIGURE_PARAMS%"=="" (
+            echo [%TIME%] 错误: 请填写编译参数
+            exit /b 1
+          )
           echo [%TIME%] 开始配置 Qt %QT_VERSION% ...
-          call "%QT_SOURCE_PATH%\configure.bat" -prefix "%QT_PREFIX%" -static -static-runtime -release -opensource -confirm-license -nomake examples -nomake tests -platform win32-msvc -cmake-generator "NMake Makefiles" %CONFIGURE_SKIP_ARGS%
+          echo [%TIME%] %CONFIGURE_PARAMS%
+          call "%QT_SOURCE_PATH%\configure.bat" %CONFIGURE_PARAMS%
           if errorlevel 1 (
             echo [%TIME%] 配置失败 (configure.bat 返回非零)
             exit /b 1
@@ -363,9 +325,36 @@ jobs:
             }
           }
 
-          $tag = '${{ inputs.release_tag }}'
-          if ([string]::IsNullOrWhiteSpace($tag)) {
-            $tag = "qt6-static-msvc-$($env:QT_VERSION)"
+          $baseTag = "qt-static-msvc-$($env:QT_VERSION)"
+          $tag = $baseTag
+
+          function Test-GitHubTagExists {
+            param([string]$TagName)
+            $env:GH_TOKEN = $env:GITHUB_TOKEN
+            gh api "repos/$env:GITHUB_REPOSITORY/git/ref/tags/$TagName" 2>$null | Out-Null
+            return $LASTEXITCODE -eq 0
+          }
+
+          if (Test-GitHubTagExists $tag) {
+            $n = 2
+            while ($true) {
+              $candidate = "$baseTag-$n"
+              if (-not (Test-GitHubTagExists $candidate)) {
+                $tag = $candidate
+                Write-Progress "Release 标签 $baseTag 已存在，使用 $tag"
+                break
+              }
+              $n++
+              if ($n -gt 999) { throw "无法生成唯一 Release 标签" }
+            }
+          } else {
+            Write-Progress "Release 标签: $tag"
+          }
+
+          $releaseName = "QT Static MSVC2022 $($env:QT_VERSION)"
+          if ($tag -ne $baseTag) {
+            $suffix = $tag.Substring($baseTag.Length + 1)
+            $releaseName = "QT Static MSVC2022 $($env:QT_VERSION) ($suffix)"
           }
 
           $artifactName = "$tag-win64"
@@ -387,6 +376,7 @@ jobs:
 
           "ARTIFACT_PATH=$archivePath" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           "RELEASE_TAG=$tag" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "RELEASE_NAME=$releaseName" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           "ARTIFACT_NAME=$artifactName" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
       - name: Upload workflow artifact
@@ -402,13 +392,14 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ env.RELEASE_TAG }}
-          name: Qt6 Static MSVC2022 ${{ env.QT_VERSION }}
+          name: ${{ env.RELEASE_NAME }}
           body: |
-            ## Qt6 静态库 (MSVC 2022 / x64)
+            ## QT 静态库 (MSVC 2022 / x64)
 
             | 项目 | 值 |
             |------|-----|
             | Qt 版本 | `${{ env.QT_VERSION }}` |
+            | Release 标签 | `${{ env.RELEASE_TAG }}` |
             | 工具链 | MSVC 2022 (静态链接 CRT) |
             | 安装前缀 | `C:\Qt\static-msvc2022` |
             | 构建时间 | ${{ github.run_started_at }} |
@@ -422,7 +413,7 @@ jobs:
 
             ### 说明
 
-            - 跳过模块由触发工作流时的 `skip_modules` 指定，留空则不跳过
+            - 编译参数为完整 `configure.bat` 参数，见 README 推荐配置
             - 完整静态构建通常需要 2~6 小时，受 GitHub Runner 性能影响
           files: ${{ env.ARTIFACT_PATH }}
           draft: false
@@ -436,9 +427,10 @@ jobs:
           ## Build Summary
 
           - **Qt Version**: ${{ env.QT_VERSION }}
-          - **Skipped Modules**: ${{ env.SKIPPED_MODULES }}
+          - **Configure Params**: ${{ inputs.configure_params }}
           - **Prefix**: $env:QT_PREFIX
           - **Artifact**: $env:ARTIFACT_NAME.7z
-          - **Release Tag**: $env:RELEASE_TAG
+          - **Release Name**: ${{ env.RELEASE_NAME }}
+          - **Release Tag**: ${{ env.RELEASE_TAG }}
           - **Release Created**: ${{ inputs.create_release }}
           "@ | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8
