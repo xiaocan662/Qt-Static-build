@@ -9,14 +9,14 @@ on:
         default: ''
         type: string
       skip_modules:
-        description: '额外跳过的模块 (逗号分隔，仅对当前版本源码中存在的模块生效)'
+        description: '要跳过的模块 (逗号分隔，如 qtwebengine,qt3d；留空不跳过任何模块)'
         required: false
         default: ''
         type: string
       parallel_jobs:
-        description: '并行编译线程数'
+        description: '并行编译线程数（留空则 jom 默认并行）'
         required: false
-        default: '4'
+        default: ''
         type: string
       create_release:
         description: '创建 GitHub Release 并上传编译产物'
@@ -37,8 +37,6 @@ env:
   QT_SRC_DIR: C:\Qt\src
   QT_BUILD_DIR: C:\Qt\build
   HEARTBEAT_SEC: 120
-  # 默认跳过名单：仅当当前版本源码中存在对应子目录时才 -skip
-  DEFAULT_SKIP_MODULES: qtwebengine,qtpdf,qt3d,qtcharts,qtdatavis3d,qtgraphs,qtlottie,qtmqtt,qtnetworkauth,qtpositioning,qtlocation,qtquick3d,qtquick3dphysics,qtremoteobjects,qtscxml,qtsensors,qtserialbus,qtserialport,qtshadertools,qtcanvaspainter,qtspeech,qtvirtualkeyboard,qtwayland,qtwebchannel,qtwebsockets,qtwebview,qtdoc,qtgrpc,qthttpserver,qtcoap,qtlanguageserver,qtconnectivity
 
 jobs:
   build:
@@ -241,78 +239,52 @@ jobs:
           "QT_SOURCE_PATH=$extractDir" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           Write-Progress "源码就绪: $extractDir"
 
-      - name: Prepare configure options
+      - name: Prepare module skip options
         shell: pwsh
         env:
-          EXTRA_SKIP: ${{ inputs.skip_modules }}
+          USER_SKIP_MODULES: ${{ inputs.skip_modules }}
         run: |
           $ErrorActionPreference = 'Stop'
 
-          $wishlist = $env:DEFAULT_SKIP_MODULES.Split(',') |
+          if ([string]::IsNullOrWhiteSpace($env:USER_SKIP_MODULES)) {
+            Write-Host "[$(Get-Date -Format 'HH:mm:ss')] 未指定跳过模块"
+            "CONFIGURE_SKIP_ARGS=" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+            "SKIPPED_MODULES=无" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+            exit 0
+          }
+
+          $userList = $env:USER_SKIP_MODULES.Split(',') |
             ForEach-Object { $_.Trim() } |
-            Where-Object { $_ }
-
-          $extraList = @()
-          if (-not [string]::IsNullOrWhiteSpace($env:EXTRA_SKIP)) {
-            $extraList = $env:EXTRA_SKIP.Split(',') | ForEach-Object { $_.Trim() } | Where-Object { $_ }
-            $wishlist += $extraList
-          }
-
-          $wishlist = $wishlist | Select-Object -Unique
-
-          # 强依赖：基础模块被跳过时，依赖它的模块也必须跳过
-          $dependentMap = @{
-            'qtshadertools' = @('qtcanvaspainter', 'qtmultimedia')
-            'qtpositioning' = @('qtlocation')
-            'qtwebengine'   = @('qtwebview')
-            'qtquick3d'     = @('qtquick3dphysics')
-          }
-
-          $changed = $true
-          while ($changed) {
-            $changed = $false
-            foreach ($base in $dependentMap.Keys) {
-              if ($base -notin $wishlist) { continue }
-              foreach ($dependent in $dependentMap[$base]) {
-                if ($dependent -notin $wishlist) {
-                  $wishlist += $dependent
-                  $changed = $true
-                  Write-Host "[$(Get-Date -Format 'HH:mm:ss')] 自动追加跳过: $dependent (依赖已跳过的 $base)"
-                }
-              }
-            }
-            $wishlist = $wishlist | Select-Object -Unique
-          }
+            Where-Object { $_ } |
+            Select-Object -Unique
 
           $availableModules = Get-ChildItem -Path $env:QT_SOURCE_PATH -Directory |
             Where-Object { $_.Name -match '^qt[a-z0-9]+$' } |
-            ForEach-Object { $_.Name } |
-            Sort-Object
+            ForEach-Object { $_.Name }
 
-          $skipModules = $wishlist | Where-Object { $_ -in $availableModules } | Sort-Object
-          $notPresentCount = @($wishlist | Where-Object { $_ -notin $availableModules }).Count
-          $extraMissing = $extraList | Where-Object { $_ -notin $availableModules } | Sort-Object
+          $skipModules = $userList | Where-Object { $_ -in $availableModules } | Sort-Object
+          $missingModules = $userList | Where-Object { $_ -notin $availableModules } | Sort-Object
 
-          Write-Host "[$(Get-Date -Format 'HH:mm:ss')] 源码含 $($availableModules.Count) 个模块，将跳过 $($skipModules.Count) 个"
-          if ($notPresentCount -gt 0) {
-            Write-Host "[$(Get-Date -Format 'HH:mm:ss')] 另有 $notPresentCount 个模块在当前版本中不存在，已忽略"
+          Write-Host "[$(Get-Date -Format 'HH:mm:ss')] 将跳过 $($skipModules.Count) 个模块"
+          if ($skipModules.Count -gt 0) {
+            Write-Host "[$(Get-Date -Format 'HH:mm:ss')] $($skipModules -join ', ')"
           }
 
-          foreach ($module in $extraMissing) {
-            Write-Host "::warning::额外指定的模块在当前源码中不存在，已忽略: $module"
+          foreach ($module in $missingModules) {
+            Write-Host "::warning::指定的模块在当前源码中不存在，已忽略: $module"
           }
 
           $skipArgs = ($skipModules | ForEach-Object { "-skip $_" }) -join ' '
           "CONFIGURE_SKIP_ARGS=$skipArgs" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           "SKIPPED_MODULES=$($skipModules -join ',')" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
-      - name: Configure Qt (static + static runtime)
+      - name: Configure Qt
         shell: cmd
         run: |
           if exist "%QT_BUILD_DIR%" rmdir /s /q "%QT_BUILD_DIR%"
           mkdir "%QT_BUILD_DIR%"
           cd /d "%QT_BUILD_DIR%"
-          echo [%TIME%] 开始配置 Qt %QT_VERSION% (NMake + 源码外构建) ...
+          echo [%TIME%] 开始配置 Qt %QT_VERSION% ...
           call "%QT_SOURCE_PATH%\configure.bat" -prefix "%QT_PREFIX%" -static -static-runtime -release -opensource -confirm-license -nomake examples -nomake tests -platform win32-msvc -cmake-generator "NMake Makefiles" %CONFIGURE_SKIP_ARGS%
           if errorlevel 1 (
             echo [%TIME%] 配置失败 (configure.bat 返回非零)
@@ -332,8 +304,13 @@ jobs:
             echo [%TIME%] 错误: 未找到 Makefile，请检查 Configure 步骤是否成功
             exit /b 1
           )
-          echo [%TIME%] 开始编译 Qt (并行 ${{ inputs.parallel_jobs }})，此步骤耗时最长 ...
-          jom -j ${{ inputs.parallel_jobs }}
+          if "${{ inputs.parallel_jobs }}"=="" (
+            echo [%TIME%] 开始编译 Qt，此步骤耗时最长 ...
+            jom
+          ) else (
+            echo [%TIME%] 开始编译 Qt (并行 ${{ inputs.parallel_jobs }})，此步骤耗时最长 ...
+            jom -j ${{ inputs.parallel_jobs }}
+          )
           if errorlevel 1 (
             echo [%TIME%] 编译失败
             exit /b 1
@@ -439,19 +416,13 @@ jobs:
 
             ### 使用方法
 
-            1. 下载 `.7z` 并解压到本地目录（例如 `C:\Qt\static-msvc2022`）
-            2. 在 CMake 项目中设置：
-               ```cmake
-               set(CMAKE_PREFIX_PATH "C:/Qt/static-msvc2022")
-               ```
-            3. 或在 qmake 项目中：
-               ```bat
-               set PATH=C:\Qt\static-msvc2022\bin;%PATH%
-               ```
+            1. 下载 `.7z` 并解压到 `C:\Qt\static-msvc2022`
+            2. 在 CMake 项目中设置 `CMAKE_PREFIX_PATH` 为 `C:/Qt/static-msvc2022`
+            3. 或将 `C:\Qt\static-msvc2022\bin` 加入 PATH
 
             ### 说明
 
-            - 已根据当前版本源码动态跳过大型/可选模块（详见 Workflow 日志中的 Skip 列表）
+            - 跳过模块由触发工作流时的 `skip_modules` 指定，留空则不跳过
             - 完整静态构建通常需要 2~6 小时，受 GitHub Runner 性能影响
           files: ${{ env.ARTIFACT_PATH }}
           draft: false
