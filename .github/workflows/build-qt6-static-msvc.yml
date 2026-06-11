@@ -295,37 +295,43 @@ jobs:
           Write-Progress '配置完成'
 
       - name: Build Qt
-        shell: cmd
+        shell: pwsh
         run: |
-          cd /d "%QT_BUILD_DIR%"
-          if not exist Makefile (
-            echo [%TIME%] 错误: 未找到 Makefile，请检查 Configure 步骤是否成功
-            exit /b 1
-          )
-          if "${{ inputs.parallel_jobs }}"=="" (
-            echo [%TIME%] 开始编译 Qt，此步骤耗时最长 ...
-            jom
-          ) else (
-            echo [%TIME%] 开始编译 Qt (并行 ${{ inputs.parallel_jobs }})，此步骤耗时最长 ...
-            jom -j ${{ inputs.parallel_jobs }}
-          )
-          if errorlevel 1 (
-            echo [%TIME%] 编译失败
-            exit /b 1
-          )
-          echo [%TIME%] 编译完成
+          $ErrorActionPreference = 'Stop'
+
+          function Write-Progress([string]$Message) {
+            Write-Host "[$(Get-Date -Format 'HH:mm:ss')] $Message"
+          }
+
+          Set-Location $env:QT_BUILD_DIR
+          if (-not (Test-Path Makefile)) {
+            Write-Progress '错误: 未找到 Makefile，请检查 Configure 步骤是否成功'
+            exit 1
+          }
+
+          $parallel = '${{ inputs.parallel_jobs }}'
+          if ($parallel) {
+            Write-Progress "开始编译 Qt，并行 $parallel，此步骤耗时最长 ..."
+            & jom -j $parallel
+          } else {
+            Write-Progress '开始编译 Qt，此步骤耗时最长 ...'
+            & jom
+          }
+          Write-Progress '编译完成'
 
       - name: Install Qt to prefix
-        shell: cmd
+        shell: pwsh
         run: |
-          cd /d "%QT_BUILD_DIR%"
-          echo [%TIME%] 开始安装到 %QT_PREFIX% ...
-          jom install
-          if errorlevel 1 (
-            echo [%TIME%] 安装失败
-            exit /b 1
-          )
-          echo [%TIME%] 安装完成
+          $ErrorActionPreference = 'Stop'
+
+          function Write-Progress([string]$Message) {
+            Write-Host "[$(Get-Date -Format 'HH:mm:ss')] $Message"
+          }
+
+          Set-Location $env:QT_BUILD_DIR
+          Write-Progress "开始安装到 $env:QT_PREFIX ..."
+          & jom install
+          Write-Progress '安装完成'
 
       - name: Package build output
         shell: pwsh
