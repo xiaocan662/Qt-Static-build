@@ -1,0 +1,76 @@
+name: Check Disk Space
+
+on:
+  workflow_dispatch:
+
+jobs:
+  check:
+    name: Check runner disk space
+    runs-on: windows-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Report disk space
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          function Format-Bytes([long]$Bytes) {
+            if ($Bytes -ge 1TB) { return '{0:N2} TB' -f ($Bytes / 1TB) }
+            if ($Bytes -ge 1GB) { return '{0:N2} GB' -f ($Bytes / 1GB) }
+            if ($Bytes -ge 1MB) { return '{0:N2} MB' -f ($Bytes / 1MB) }
+            return '{0:N2} KB' -f ($Bytes / 1KB)
+          }
+
+          Write-Host '=== GitHub Actions 路径 ==='
+          Write-Host "GITHUB_WORKSPACE = $env:GITHUB_WORKSPACE"
+          Write-Host "RUNNER_TEMP      = $env:RUNNER_TEMP"
+          Write-Host "RUNNER_TOOL_CACHE = $env:RUNNER_TOOL_CACHE"
+          Write-Host ''
+
+          Write-Host '=== 各盘符空间 ==='
+          $drives = Get-CimInstance Win32_LogicalDisk |
+            Where-Object { $_.DriveType -eq 3 } |
+            Sort-Object DeviceID
+
+          $rows = foreach ($disk in $drives) {
+            $used = $disk.Size - $disk.FreeSpace
+            [PSCustomObject]@{
+              Drive     = $disk.DeviceID
+              Total     = Format-Bytes $disk.Size
+              Used      = Format-Bytes $used
+              Free      = Format-Bytes $disk.FreeSpace
+              FreePct   = if ($disk.Size -gt 0) { '{0:N1}%' -f (100 * $disk.FreeSpace / $disk.Size) } else { 'N/A' }
+              Volume    = $disk.VolumeName
+            }
+          }
+
+          $rows | Format-Table -AutoSize | Out-String | Write-Host
+
+          $dDrive = $rows | Where-Object { $_.Drive -eq 'D:' } | Select-Object -First 1
+          if ($dDrive) {
+            Write-Host "D: 盘可用: $($dDrive.Free) ($($dDrive.FreePct))"
+          } else {
+            Write-Warning '未检测到 D: 盘'
+          }
+
+          $summary = @(
+            '## Runner Disk Space',
+            '',
+            '| Drive | Total | Used | Free | Free % | Volume |',
+            '|-------|-------|------|------|--------|--------|'
+          )
+          foreach ($row in $rows) {
+            $summary += "| $($row.Drive) | $($row.Total) | $($row.Used) | $($row.Free) | $($row.FreePct) | $($row.Volume) |"
+          }
+          $summary += ''
+          $summary += '### Paths'
+          $summary += "- **GITHUB_WORKSPACE**: ``$env:GITHUB_WORKSPACE``"
+          $summary += "- **RUNNER_TEMP**: ``$env:RUNNER_TEMP``"
+          if ($dDrive) {
+            $summary += ''
+            $summary += "### D: drive"
+            $summary += "- **Free**: $($dDrive.Free) ($($dDrive.FreePct))"
+          }
+
+          $summary -join "`n" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8

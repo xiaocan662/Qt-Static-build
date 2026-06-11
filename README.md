@@ -25,7 +25,15 @@ set(CMAKE_PREFIX_PATH "C:/Qt/static-msvc2022")
 
 ---
 
-## 测试发布流程（无需编译 Qt）
+## 检查 Runner 磁盘空间
+
+编译前可先查看 GitHub Runner 上 C/D 盘各有多少可用空间：
+
+**Actions** → **Check Disk Space** → **Run workflow**
+
+约 **30 秒** 完成，结果在运行日志和 **Summary** 里可看到各盘符总容量、已用、剩余及 `GITHUB_WORKSPACE` / `RUNNER_TEMP` 路径。
+
+---
 
 在改发布逻辑或排查 Release 失败时，可单独运行：
 
