@@ -236,27 +236,65 @@ jobs:
           Write-Progress "源码就绪: $extractDir"
 
       - name: Configure Qt
-        shell: cmd
+        shell: pwsh
         run: |
-          if exist "%QT_BUILD_DIR%" rmdir /s /q "%QT_BUILD_DIR%"
-          mkdir "%QT_BUILD_DIR%"
-          cd /d "%QT_BUILD_DIR%"
-          if "%CONFIGURE_PARAMS%"=="" (
-            echo [%TIME%] 错误: 请填写编译参数
-            exit /b 1
-          )
-          echo [%TIME%] 开始配置 Qt %QT_VERSION% ...
-          echo [%TIME%] %CONFIGURE_PARAMS%
-          call "%QT_SOURCE_PATH%\configure.bat" %CONFIGURE_PARAMS%
-          if errorlevel 1 (
-            echo [%TIME%] 配置失败 (configure.bat 返回非零)
-            exit /b 1
-          )
-          if not exist Makefile (
-            echo [%TIME%] 配置失败: 未生成 Makefile
-            exit /b 1
-          )
-          echo [%TIME%] 配置完成
+          $ErrorActionPreference = 'Stop'
+
+          function Write-Progress([string]$Message) {
+            Write-Host "[$(Get-Date -Format 'HH:mm:ss')] $Message"
+          }
+
+          function ConvertFrom-ConfigureArgv {
+            param([string]$String)
+            $argv = [System.Collections.Generic.List[string]]::new()
+            $i = 0
+            while ($i -lt $String.Length) {
+              if ($String[$i] -eq ' ') { $i++; continue }
+              if ($String[$i] -eq '"') {
+                $i++
+                $start = $i
+                while ($i -lt $String.Length -and $String[$i] -ne '"') { $i++ }
+                $argv.Add($String.Substring($start, $i - $start))
+                if ($i -lt $String.Length) { $i++ }
+              } else {
+                $start = $i
+                while ($i -lt $String.Length -and $String[$i] -ne ' ') { $i++ }
+                $argv.Add($String.Substring($start, $i - $start))
+              }
+            }
+            return $argv.ToArray()
+          }
+
+          if ([string]::IsNullOrWhiteSpace($env:CONFIGURE_PARAMS)) {
+            Write-Progress '错误: 请填写编译参数'
+            exit 1
+          }
+
+          if (Test-Path $env:QT_BUILD_DIR) { Remove-Item $env:QT_BUILD_DIR -Recurse -Force }
+          New-Item -ItemType Directory -Force -Path $env:QT_BUILD_DIR | Out-Null
+          Set-Location $env:QT_BUILD_DIR
+
+          Write-Progress "开始配置 Qt $env:QT_VERSION ..."
+          Write-Progress $env:CONFIGURE_PARAMS
+
+          $configureBat = Join-Path $env:QT_SOURCE_PATH 'configure.bat'
+          $configureArgs = ConvertFrom-ConfigureArgv $env:CONFIGURE_PARAMS
+          $argString = ($configureArgs | ForEach-Object {
+            if ($_ -match '[\s"]') { '"{0}"' -f ($_ -replace '"', '""') } else { $_ }
+          }) -join ' '
+
+          cmd.exe /c "call `"$configureBat`" $argString"
+          if ($LASTEXITCODE -ne 0) {
+            Write-Progress '配置失败 (configure.bat 返回非零)'
+            exit $LASTEXITCODE
+          }
+
+          if (-not (Test-Path 'Makefile')) {
+            Write-Progress '配置失败: 未生成 Makefile'
+            exit 1
+          }
+
+          Write-Progress '配置完成'
 
       - name: Build Qt
         shell: cmd
