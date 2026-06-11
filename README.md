@@ -17,11 +17,13 @@
 | `parallel_jobs` | 并行编译线程数；留空由 `cmake --build` 自动并行 |
 | `create_release` | 是否创建 GitHub Release（独立 job 执行，**失败不影响编译与 Artifacts**） |
 
-解压安装包到 `C:\Qt\static-msvc2022` 后，在 CMake 中设置：
+解压安装包到本地目录（推荐 `C:\Qt\static-msvc2022`）后，在 CMake 中设置：
 
 ```cmake
 set(CMAKE_PREFIX_PATH "C:/Qt/static-msvc2022")
 ```
+
+> CI 在 Runner 的 **D 盘**（`D:\Qt\...`）编译安装；下载的 `.7z` 解压到本机任意路径即可，`CMAKE_PREFIX_PATH` 指向解压目录。
 
 ---
 
@@ -58,7 +60,7 @@ set(CMAKE_PREFIX_PATH "C:/Qt/static-msvc2022")
 **整段复制，粘贴到「编译参数」即可：**
 
 ```text
--prefix C:/Qt/static-msvc2022 -static -static-runtime -release -opensource -confirm-license -nomake examples -nomake tests -platform win32-msvc -cmake-generator "NMake Makefiles" -skip qt3d,qtcanvaspainter,qtcharts,qtcoap,qtconnectivity,qtdatavis3d,qtdoc,qtgraphs,qtgrpc,qthttpserver,qtlanguageserver,qtlocation,qtlottie,qtmqtt,qtmultimedia,qtnetworkauth,qtopcua,qtopenapi,qtpositioning,qtprotobuf,qtquick3d,qtquick3dphysics,qtquickeffectmaker,qtremoteobjects,qtscxml,qtsensors,qtserialbus,qtserialport,qtshadertools,qtspeech,qttasktree,qtvirtualkeyboard,qtwayland,qtwebchannel,qtwebengine,qtwebsockets,qtwebview,qtpdf
+-prefix D:/Qt/static-msvc2022 -static -static-runtime -release -opensource -confirm-license -nomake examples -nomake tests -platform win32-msvc -cmake-generator "NMake Makefiles" -skip qt3d,qtcanvaspainter,qtcharts,qtcoap,qtconnectivity,qtdatavis3d,qtdoc,qtgraphs,qtgrpc,qthttpserver,qtlanguageserver,qtlocation,qtlottie,qtmqtt,qtmultimedia,qtnetworkauth,qtopcua,qtopenapi,qtpositioning,qtprotobuf,qtquick3d,qtquick3dphysics,qtquickeffectmaker,qtremoteobjects,qtscxml,qtsensors,qtserialbus,qtserialport,qtshadertools,qtspeech,qttasktree,qtvirtualkeyboard,qtwayland,qtwebchannel,qtwebengine,qtwebsockets,qtwebview,qtpdf
 ```
 
 ### 保留的主要模块（未出现在 `-skip` 中）
@@ -106,7 +108,8 @@ set(CMAKE_PREFIX_PATH "C:/Qt/static-msvc2022")
 ## 注意事项
 
 - **编译参数为必填**，须包含 `-prefix` 等完整 configure 选项
-- `-prefix` 须为 `C:/Qt/static-msvc2022`，与打包安装路径一致
+- `-prefix` 须为 `D:/Qt/static-msvc2022`，与工作流 D 盘安装路径一致（与 CI `QT_PREFIX` 相同）
+- 源码/构建目录也在 D 盘（`D:\Qt\src`、`D:\Qt\build`），避免占满 C 盘
 - 完整静态编译通常需要 **2~6 小时**
 - GitHub Release 单文件上限 **2 GB**；若 Release 失败，**build job 仍成功**，可从 Artifacts 下载（保留 14 天）
 - Release 在独立 **publish** job 中创建（`continue-on-error`），发布失败不会导致整次编译作废

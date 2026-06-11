@@ -23,7 +23,7 @@ permissions:
   contents: write
 
 env:
-  QT_PREFIX: C:\Qt\static-msvc2022
+  QT_PREFIX: D:\Qt\static-msvc2022
   HEARTBEAT_SEC: 120
 
 jobs:

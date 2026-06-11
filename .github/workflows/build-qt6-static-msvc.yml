@@ -27,9 +27,9 @@ permissions:
   contents: write
 
 env:
-  QT_PREFIX: C:\Qt\static-msvc2022
-  QT_SRC_DIR: C:\Qt\src
-  QT_BUILD_DIR: C:\Qt\build
+  QT_PREFIX: D:\Qt\static-msvc2022
+  QT_SRC_DIR: D:\Qt\src
+  QT_BUILD_DIR: D:\Qt\build
   HEARTBEAT_SEC: 120
 
 jobs:
@@ -516,15 +516,15 @@ jobs:
             | Qt 版本 | `${{ needs.build.outputs.qt_version }}` |
             | Release 标签 | `${{ needs.build.outputs.release_tag }}` |
             | 工具链 | MSVC 2022 (静态链接 CRT) |
-            | 安装前缀 | `C:\Qt\static-msvc2022` |
+            | 安装前缀（CI 构建） | `D:\Qt\static-msvc2022` |
             | 构建时间 | ${{ github.run_started_at }} |
             | Build Workflow Run | ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }} |
 
             ### 使用方法
 
-            1. 下载 `.7z` 并解压到 `C:\Qt\static-msvc2022`
-            2. 在 CMake 项目中设置 `CMAKE_PREFIX_PATH` 为 `C:/Qt/static-msvc2022`
-            3. 或将 `C:\Qt\static-msvc2022\bin` 加入 PATH
+            1. 下载 `.7z` 并解压到本地目录（如 `C:\Qt\static-msvc2022`）
+            2. 在 CMake 项目中设置 `CMAKE_PREFIX_PATH` 为解压路径（如 `C:/Qt/static-msvc2022`）
+            3. 或将 `<解压路径>\bin` 加入 PATH
 
             ### 说明
 
