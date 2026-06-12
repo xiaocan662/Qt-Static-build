@@ -11,6 +11,7 @@ on:
       configure_params:
         description: '编译参数（必填，完整 configure.bat 参数，见 README 推荐配置）'
         required: true
+        default: '-prefix "D:/Qt/static-msvc2022" -static -release -opensource -confirm-license -nomake examples -nomake tests -platform win32-msvc -cmake-generator "NMake Makefiles" -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded -schannel -no-openssl -qt-zlib -qt-libpng -qt-libjpeg -qt-freetype -qt-harfbuzz -qt-sqlite -optimize-size -gc-binaries -skip qtwebengine,qtpdf,qtwayland,qtconnectivity -- -DCMAKE_CXX_FLAGS="/D_SILENCE_EXPERIMENTAL_COROUTINE_DEPRECATION_WARNINGS"'
         type: string
       parallel_jobs:
         description: '并行编译线程数（留空则 cmake --build 自动并行）'

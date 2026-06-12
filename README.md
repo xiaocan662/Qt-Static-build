@@ -60,7 +60,18 @@ set(CMAKE_PREFIX_PATH "C:/Qt/static-msvc2022")
 **整段复制，粘贴到「编译参数」即可：**
 
 ```text
--prefix D:/Qt/static-msvc2022 -static -static-runtime -release -opensource -confirm-license -nomake examples -nomake tests -platform win32-msvc -cmake-generator "NMake Makefiles" -skip qt3d,qtcanvaspainter,qtcharts,qtcoap,qtconnectivity,qtdatavis3d,qtdoc,qtgraphs,qtgrpc,qthttpserver,qtlanguageserver,qtlocation,qtlottie,qtmqtt,qtmultimedia,qtnetworkauth,qtopcua,qtopenapi,qtpositioning,qtprotobuf,qtquick3d,qtquick3dphysics,qtquickeffectmaker,qtremoteobjects,qtscxml,qtsensors,qtserialbus,qtserialport,qtshadertools,qtspeech,qttasktree,qtvirtualkeyboard,qtwayland,qtwebchannel,qtwebengine,qtwebsockets,qtwebview,qtpdf
+-prefix "D:/Qt/static-msvc2022" ^
+-static ^
+-release ^
+-opensource -confirm-license ^
+-nomake examples -nomake tests ^
+-platform win32-msvc ^
+-cmake-generator "NMake Makefiles" ^
+-DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded ^
+-schannel -no-openssl ^
+-qt-zlib -qt-libpng -qt-libjpeg -qt-freetype -qt-harfbuzz -qt-sqlite ^
+-optimize-size -gc-binaries ^
+-skip qtwebengine,qtpdf,qtwayland,qtconnectivity
 ```
 
 ### 保留的主要模块（未出现在 `-skip` 中）
@@ -93,6 +104,7 @@ set(CMAKE_PREFIX_PATH "C:/Qt/static-msvc2022")
 | 3D 链 | `qtquick3dphysics` | 依赖 `qtquick3d` |
 | 3D 链 | `qt3d` | 3D 引擎 |
 | 网络/IoT | `qtgrpc`,`qtprotobuf`,`qthttpserver`,`qtmqtt`,`qtcoap`,`qtnetworkauth` | gRPC / HTTP 服务 / IoT |
+| 蓝牙/连接 | `qtconnectivity` | 蓝牙 / NFC（VS 2026 编译不兼容） |
 | 工业/设备 | `qtserialport`,`qtserialbus`,`qtopcua`,`qtsensors` | 串口 / 工业协议 |
 | 其他可选 | `qtcharts`,`qtgraphs`,`qtdatavis3d`,`qtlottie`,`qtpdf`,`qtspeech`,`qtvirtualkeyboard`,`qttasktree`,`qtopenapi` 等 | 图表 / PDF / 语音 / 6.11 新模块 |
 
